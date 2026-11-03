@@ -1,0 +1,11 @@
+# Build notes
+- SKILL.md — supervisor procedure: session start, lane flow, routing, review policy, merge train, batching, external lanes, questions, overnight mode, 15-minute check prompt, lessons.
+- agents/ — orch-builder, orch-reviewer, orch-resolver (symlinked into ~/.claude/agents/).
+- scripts/orch-env.sh — shared config (ORCH_REPO, ORCH_STATE, ORCH_WT_PREFIX, ORCH_CI_GATE, ORCH_LOCAL_GATES, ...).
+- scripts/merge-seq.sh, train.sh, merge-pr.sh — merge train with lock, optional speculation, exact-commit CI gate.
+- scripts/run-pipe.sh, wait-merged.sh — detached pipelines; stacked-branch waiter keyed on PR merged state.
+- scripts/launch.sh, lane-busy.sh — external herdr lanes (visible WAITING/STARTED; queue gate off by default).
+- scripts/watch-all.sh, merge-queue-len.sh, cleanup-merged.sh — supplementary watcher, queue count, post-merge cleanup.
+- templates/ — brief-common, brief-port, review, delta-review, resolver, stale-test-fixer, pr-text prompts; project-config.example.
+- Generalized from a session's /tmp scripts: dropped project-specific focused-integration and full-main runs; local gates are one configurable command.
+- State lives in ~/.local/share/orchestrate/<repo> (never /tmp). No license yet.

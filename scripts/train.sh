@@ -1,0 +1,22 @@
+#!/bin/bash
+# usage: train.sh <stem> <tag> — merge the default branch (or SPEC_BASE) into the lane worktree, then run local gates
+# if ORCH_LOCAL_GATES is set; otherwise report "tests: delegated to PR CI".
+# Exit codes: 2 no worktree, 3 merge conflict (conflicted files printed), 5 local gates failed.
+set -u
+. "$(dirname "$0")/orch-env.sh"
+wt=$ORCH_WT_PREFIX$1; tag=$2; cd "$wt" || exit 2
+git fetch -q "$ORCH_REMOTE"
+br=$(git branch --show-current)
+# SPEC_BASE (from merge-seq's two-deep queue) is the head-of-queue branch's candidate, which already contains main.
+if [ -n "${SPEC_BASE:-}" ]; then M=$SPEC_BASE; MSG="Merged current $ORCH_MAIN and the ${SPEC_FROM:-queued} branch into the $br branch."
+else M=$ORCH_REMOTE/$ORCH_MAIN; MSG="Merged current $ORCH_MAIN into the $br branch."; fi
+if ! git merge --no-edit "$M" -m "$MSG" > "$ORCH_STATE/train-$tag-merge.log" 2>&1; then
+  echo "CONFLICT"; git status --short | grep -E '^(UU|AA|DU|UD)'; exit 3
+fi
+# HEAD_FILE: publish "candidate-head branch main" so one waiting branch can test on top of this candidate.
+[ -n "${HEAD_FILE:-}" ] && [ -d "$(dirname "$HEAD_FILE")" ] && \
+  echo "$(git rev-parse HEAD) $br $(git rev-parse "$ORCH_REMOTE/$ORCH_MAIN")" > "$HEAD_FILE"
+if [ -z "${ORCH_LOCAL_GATES:-}" ]; then echo "tests: delegated to PR CI"; echo "HEAD $(git rev-parse HEAD)"; exit 0; fi
+if bash -c "$ORCH_LOCAL_GATES" > "$ORCH_STATE/train-$tag-gates.log" 2>&1; then echo "gates: local ok"
+else echo "GATES-FAIL (see $ORCH_STATE/train-$tag-gates.log)"; tail -20 "$ORCH_STATE/train-$tag-gates.log"; exit 5; fi
+echo "HEAD $(git rev-parse HEAD)"
