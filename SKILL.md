@@ -174,3 +174,9 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   existing unit tests that pin query shapes, not only new tests.
 - **Rule changes stale old fixtures** — when a ruling tightens a rule, grep for tests that exercise the old behavior
   before queuing.
+- **Branch names get reused** — `gh pr list --state merged --head <branch>` can match an old, unrelated PR with the
+  same branch name. Pick unique lane names (add a date or counter) and key waiters on the PR number once it exists.
+- **Mechanical "both added" merges inside list literals** — when both sides end mid-entry, joining them needs the
+  closing and opening brackets between them. Always run the type checker after a scripted resolution.
+- **CI jobs that time out are not failures of the code** — check which job failed and whether it was cancelled;
+  rerun only the failed job (`gh run rerun <id> --failed`) instead of fixing the branch.
