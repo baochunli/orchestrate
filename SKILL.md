@@ -180,3 +180,5 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   closing and opening brackets between them. Always run the type checker after a scripted resolution.
 - **CI jobs that time out are not failures of the code** — check which job failed and whether it was cancelled;
   rerun only the failed job (`gh run rerun <id> --failed`) instead of fixing the branch.
+- **The cron check only fires while the session is idle** — a pending question or a long turn skips it. Don't leave
+  a question open for long while lanes are in flight, and after any long turn run the check by hand.
