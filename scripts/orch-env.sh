@@ -9,6 +9,8 @@
 #   ORCH_GATES_TEXT text substituted for [GATES] in PR bodies when gates are delegated to PR CI
 #   ORCH_POLL       lock poll interval in seconds (default 30)
 #   ORCH_QUEUE_MAX  launch.sh holds build lanes while the merge queue has >= this many branches (default 99 = off)
+#   ORCH_MODEL / ORCH_EFFORT  default model and effort for pipeline.sh / review-chain.sh when BUILD_*, REVIEW_*, PRTEXT_* are unset
+#   ORCH_LANE_PREFIX  prefix of external lane names (default "orch"): <prefix>-<stem>-build, -rev, -rev2, <prefix>-pr-<stem>
 #   ORCH_POST_MERGE optional command run after each merge with args: <worktree> <branch> <stem>
 ORCH_REPO=${ORCH_REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}
 [ -n "$ORCH_REPO" ] || { echo "orchestrate: set ORCH_REPO (no git repo here)" >&2; exit 2; }

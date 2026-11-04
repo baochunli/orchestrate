@@ -43,6 +43,10 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - **Review** (agent `orch-reviewer`): against `git merge-base origin/main HEAD` (or the parent for stacked branches).
 - **PR text:** a writer agent (or yourself) from brief + report + verdict + diff stat → `pr/<stem>.txt`.
 - **Queue:** `$S/run-pipe.sh <branch> $S/merge-seq.sh <stem>:<branch>:<stem>` (run in background).
+- **Chained external lanes:** `launch.sh` is single-stage (starts one lane and stops). `pipeline.sh` chains
+  build → report check → review → PR text → merge train: `$S/run-pipe.sh <branch> $S/pipeline.sh <branch> '<deps>|-' [full]`.
+  For an already-built branch run `review-chain.sh <stem> <branch>`; `CHAIN_NO_MERGE=1` stops after the PR text.
+  A failed review prints `CHAIN FAIL <stem>: <verdict head>`; the 15-minute check must grep `pipe-*.out` for it.
 - **Stacked branches:** create from `origin/<parent>`; queue with
   `$S/wait-merged.sh <parent> $ORCH_STATE/pr/<stem>.txt -- $S/run-pipe.sh <branch> $S/merge-seq.sh ...`.
   **Never** wait on `git merge-base --is-ancestor origin/<parent> ...`: the parent ref is deleted on merge.
@@ -103,7 +107,12 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 ## 5. External lanes
 
-- `MODEL=<model> KIND=<muse|codex> $S/launch.sh <lane> <worktree> <effort> "<prompt>"`.
+- `MODEL=<model> KIND=<muse|codex> $S/launch.sh <lane> <worktree> <effort> "<prompt>"` starts ONE lane and stops.
+  `pipeline.sh` (build, review, PR text, merge) and `review-chain.sh` chain lanes; `wait-lanes.sh <lane>...` waits on
+  herdr status and re-prompts lanes stopped by a capacity error. Set `BUILD_MODEL`, `REVIEW_MODEL`, `PRTEXT_MODEL` (+
+  `*_EFFORT`), falling back to `ORCH_MODEL`/`ORCH_EFFORT` in `$ORCH_STATE/env.sh`. Review and PR-text prompts come from
+  `templates/review-prompt.md` and `pr-text-prompt.md` (tokens filled by the script; project rules via `BUILD_EXTRA`,
+  `REVIEW_EXTRA`, `PRTEXT_EXTRA`).
 - They do **not** notify. Detect completion only by the report scan in the 15-minute check.
 - At the next check after launch, verify activity (new commits or a dirty worktree, or `lane-busy.sh`). A launch can
   be silently held (queue gate, pause file): `launch.sh` prints `WAITING (queue gate)` and `STARTED`; check for them.
@@ -153,7 +162,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 ```
 Run the 15-minute independent train check (the user's standing rule: a timer must watch every 15 minutes and cannot depend on any other watcher). Do NOT rely on watch-all.sh or waiter loops; check ground truth. State dir: $ORCH_STATE (see ~/.claude/skills/orchestrate/SKILL.md).
 (1) git fetch; gh pr list --state open; git log --oneline -8 origin/main.
-(2) For each branch in flight: tail -5 $ORCH_STATE/pipe-<branch>.out (check the file time; ignore lines older than the latest requeue) and ps for merge-seq.sh. An rc=3 CONFLICT, MERGE FAIL CI or push rejection with no live merge-seq for that branch and no resolver running is UNHANDLED: dispatch a fix now (resolve mechanical conflicts yourself), then requeue.
+(2) grep -h "CHAIN FAIL" $ORCH_STATE/pipe-*.out (a failed review or lane: act on it). For each branch in flight: tail -5 $ORCH_STATE/pipe-<branch>.out (check the file time; ignore lines older than the latest requeue) and ps for merge-seq.sh. An rc=3 CONFLICT, MERGE FAIL CI or push rejection with no live merge-seq for that branch and no resolver running is UNHANDLED: dispatch a fix now (resolve mechanical conflicts yourself), then requeue.
 (3) Scan every $ORCH_STATE/*-report.md modified today (external lanes do NOT notify; this scan is how you learn they finished). Skip branches listed in $ORCH_STATE/batches.md. STALLED = no <stem>-review*.md, or a PASS review without pr/<stem>.txt, or both but no pipe-<branch>.out and no live merge-seq. Advance it (review → PR text → merge-seq).
 (4) External lanes launched since the last check: verify they actually started (new commits / dirty worktree / lane-busy.sh; WAITING lines in pipe-launch-waits.out mean a gate is holding them).
 (5) Batches and gated rows: queue a batch when its report and PR text exist; queue a stacked branch or start a gated lane only after its parent's PR shows MERGED.
