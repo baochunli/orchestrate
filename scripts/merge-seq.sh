@@ -5,15 +5,15 @@
 # Output lines a supervisor must act on: "<wt> TRAIN rc=3" + CONFLICT (resolve, push, requeue),
 # "MERGE FAIL CI: ..." (fix, push, requeue), "MERGE FAIL STALE/DIRTY" (requeue / clean worktree).
 #
-# Locking: merges are serialized by $ORCH_STATE/merge.lock, so main cannot move during a train. A lock whose owner
-# PID is gone is reclaimed. $ORCH_STATE/merge-priority, if present, names one stem that must take the lock first.
-# Two-deep speculation (off unless $ORCH_STATE/merge-spec contains "on"; checked on every poll): while branch A holds
+# Locking: merges are serialized by $ORCH_RUN/merge.lock, so main cannot move during a train. A lock whose owner
+# PID is gone is reclaimed. $ORCH_RUN/merge-priority, if present, names one stem that must take the lock first.
+# Two-deep speculation (off unless $ORCH_RUN/merge-spec contains "on"; checked on every poll): while branch A holds
 # merge.lock, one waiting branch B may take spec.lock and run its gates on A's candidate head (main + A). Once A is
 # done, B merges on those gates only if main is exactly A's merge and merging main into B leaves B's tree unchanged;
 # otherwise B's speculative merge is undone and B runs a normal train. Only the spec.lock holder (or the priority
 # stem) may take merge.lock. Speculation only pays off when local gates are slow; with CI-only gates leave it off.
 . "$(dirname "$0")/orch-env.sh"
-D=$ORCH_STATE; L=$D/merge.lock; S=$D/spec.lock; P=$D/merge-priority; BIN=$ORCH_SKILL_DIR
+D=$ORCH_RUN; G_LOGS=$ORCH_LOGS; L=$D/merge.lock; S=$D/spec.lock; P=$D/merge-priority; BIN=$ORCH_SKILL_DIR
 mine() { [ "$(cat "$1/pid" 2>/dev/null)" = "$$" ]; }
 reclaim() { local o; o=$(cat "$1/pid" 2>/dev/null); [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null && rm -rf "$1"; }
 prio_ok() { [ ! -s "$P" ] || [ "$(cat "$P")" = "$1" ]; }
@@ -38,7 +38,7 @@ maybe_spec() {
   mkdir "$S" 2>/dev/null || return; echo $$ > "$S/pid"
   SH=$ah; SM=$am; SPRE=$(git -C "$w" rev-parse HEAD)
   echo "$wt speculative gates on $ORCH_MAIN + $ab"
-  SPEC_BASE=$ah SPEC_FROM=$ab "$BIN/train.sh" "$wt" "spec$wt" > "$D/spec-$wt.out" 2>&1; SRC=$?
+  SPEC_BASE=$ah SPEC_FROM=$ab "$BIN/train.sh" "$wt" "spec$wt" > "$G_LOGS/spec-$wt.out" 2>&1; SRC=$?
 }
 lock() {
   until prio_ok "$1" && spec_ok "$1" && mkdir "$L" 2>/dev/null; do reclaim "$L"; reclaim "$S"; maybe_spec; sleep "$ORCH_POLL"; done
@@ -64,13 +64,13 @@ for x in "$@"; do
   if [ -n "$SH" ]; then
     if spec_valid; then
       clearprio "$stem"; echo "$wt speculation valid: using the speculative gates"
-      gates "$D/spec-$wt.out" || continue
+      gates "$G_LOGS/spec-$wt.out" || continue
       echo "$wt gates: $G"; "$BIN/merge-pr.sh" "$wt" "$br" "$stem" "$G" 2>&1 | grep -vE "^remote:"
       continue
     fi
     spec_undo
   fi
-  out=$D/train-$wt.out
+  out=$G_LOGS/train-$wt.out
   HEAD_FILE=$L/head "$BIN/train.sh" "$wt" "train$wt" > "$out" 2>&1; rc=$?
   clearprio "$stem"
   if [ $rc -ne 0 ]; then echo "$wt TRAIN rc=$rc"; tail -4 "$out"; continue; fi

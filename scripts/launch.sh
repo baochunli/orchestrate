@@ -4,24 +4,26 @@
 # started on the prompt (not left queued); retries twice. KIND picks the CLI (default from $ORCH_EXTERNAL_KIND, else muse).
 #
 # WARNING (lesson): external lanes do NOT notify the supervisor when they finish. The supervisor must scan
-# $ORCH_STATE/*-report.md on every check, and must verify the lane actually started (worktree activity) at the next check.
+# $ORCH_REPORTS/*.md on every check, and must verify the lane actually started (worktree activity) at the next check.
 #
 # Queue gate: lanes whose prompt starts with "Read <brief>" wait while the merge queue has >= ORCH_QUEUE_MAX branches
 # (default 99 = effectively off). The wait prints a visible WAITING line every 5 min, so a held lane is never silent.
-# Pause: "$ORCH_STATE/pause-<kind>-until" holding an epoch time refuses launches of that kind until then (exit 3).
-# Overrides: "$ORCH_STATE/model-overrides.txt" lines "<lane-name> <model> [effort]" win over MODEL/effort.
+# Pause: "$ORCH_RUN/pause-<kind>-until" holding an epoch time refuses launches of that kind until then (exit 3).
+# Overrides: "$ORCH_RUN/model-overrides.txt" lines "<lane-name> <model> [effort]" win over MODEL/effort.
 . "$(dirname "$0")/orch-env.sh"
 name=$1; dir=$2; effort=$3; msg=$4
-KIND=${KIND:-${ORCH_EXTERNAL_KIND:-muse}}
-ov=$(awk -v n="$name" '$1==n {print $2}' "$ORCH_STATE/model-overrides.txt" 2>/dev/null | tail -1); [ -n "$ov" ] && MODEL=$ov
-oe=$(awk -v n="$name" '$1==n {print $3}' "$ORCH_STATE/model-overrides.txt" 2>/dev/null | tail -1); [ -n "$oe" ] && effort=$oe
+ov=$(awk -v n="$name" '$1==n {print $2}' "$ORCH_RUN/model-overrides.txt" 2>/dev/null | tail -1); [ -n "$ov" ] && MODEL=$ov
+oe=$(awk -v n="$name" '$1==n {print $3}' "$ORCH_RUN/model-overrides.txt" 2>/dev/null | tail -1); [ -n "$oe" ] && effort=$oe
 [ -n "${MODEL:-}" ] || { echo "launch.sh: set MODEL" >&2; exit 2; }
+# KIND: explicit, else the first ORCH_KIND_MAP glob matching MODEL, else ORCH_EXTERNAL_KIND, else muse.
+if [ -z "${KIND:-}" ]; then for kv in ${ORCH_KIND_MAP:-}; do case "$MODEL" in ${kv%%=*}) KIND=${kv#*=}; break ;; esac; done; fi
+KIND=${KIND:-${ORCH_EXTERNAL_KIND:-muse}}
 command -v herdr >/dev/null || { echo "launch.sh: herdr CLI not found; start the external lane by hand" >&2; exit 2; }
-pu=$(cat "$ORCH_STATE/pause-$KIND-until" 2>/dev/null || echo 0)
+pu=$(cat "$ORCH_RUN/pause-$KIND-until" 2>/dev/null || echo 0)
 if [ "$(date +%s)" -lt "$pu" ]; then echo "$KIND LANES PAUSED until $(date -r "$pu" '+%Y-%m-%d %H:%M'); not launching $name" >&2; exit 3; fi
 if echo "$msg" | grep -q "^Read .*brief" && [ "$ORCH_QUEUE_MAX" -lt 99 ]; then
   while [ "$("$ORCH_SKILL_DIR/merge-queue-len.sh")" -ge "$ORCH_QUEUE_MAX" ]; do
-    echo "WAITING (queue gate): $name held, merge queue >= $ORCH_QUEUE_MAX at $(date +%H:%M)" | tee -a "$ORCH_STATE/pipe-launch-waits.out"
+    echo "WAITING (queue gate): $name held, merge queue >= $ORCH_QUEUE_MAX at $(date +%H:%M)" | tee -a "$ORCH_PIPES/launch-waits.out"
     sleep 300
   done
 fi
@@ -42,4 +44,4 @@ for attempt in 1 2 3; do
   echo "launch $name attempt $attempt did not start; retrying" >&2
   pid=${pane%%:*}; herdr workspace close "$pid" >/dev/null 2>&1; sleep 5
 done
-echo "LAUNCH FAIL $name" >&2; echo "LAUNCH FAIL $name" >> "$ORCH_STATE/pipe-launch-failures.out"; exit 1
+echo "LAUNCH FAIL $name" >&2; echo "LAUNCH FAIL $name" >> "$ORCH_PIPES/launch-failures.out"; exit 1

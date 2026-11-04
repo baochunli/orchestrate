@@ -46,7 +46,7 @@ Run them from anywhere inside the repo, or set `ORCH_REPO`.
 
 | Script | Purpose |
 |---|---|
-| `run-pipe.sh <name> <cmd...>` | Start a pipeline detached; output → `$ORCH_STATE/pipe-<name>.out`. |
+| `run-pipe.sh <name> <cmd...>` | Start a pipeline detached; output → `$ORCH_PIPES/<name>.out`. |
 | `merge-seq.sh <wt>:<branch>:<stem> ...` | The merge train (lock → train → PR → exact-commit CI → merge). |
 | `train.sh <wt> <tag>` | Merge the default branch into the lane; optional `ORCH_LOCAL_GATES`. Exit 3 = conflict. |
 | `merge-pr.sh <wt> <branch> <stem> "<gates>"` | Push, create/update PR from `pr/<stem>.txt`, wait for CI, merge, clean up. |

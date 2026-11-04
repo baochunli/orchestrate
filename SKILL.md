@@ -14,10 +14,25 @@ ask the user only what is theirs to decide, and log everything. You never deploy
   `templates/project-config.example.md` there, fill it with the user, and keep it uncommitted unless they say otherwise.
   The config overrides every default in this skill (models, gates, forbidden actions, deploy, docs rules).
 - **State dir.** `export ORCH_STATE=~/.local/share/orchestrate/<repo-name>` (the scripts default to this). Never use
-  `/tmp` for state: a reboot wipes it. It holds `pr/`, `pipe-*.out`, locks, reports, verdicts, the decisions log.
+  `/tmp` for state, not even through a symlink: a reboot wipes it. Typed subfolders (variables in `orch-env.sh`):
+
+  | Folder | Holds | In the state repo |
+  |---|---|---|
+  | `briefs/` | `<branch>.md`, `common.md` | yes |
+  | `reports/` | builder reports `<branch>.md` | yes |
+  | `reviews/` | verdicts `<stem>-review<N>.md` | yes |
+  | `pr/` | PR texts `<stem>.txt` | yes |
+  | `pipes/` | pipeline and merge-train output `<name>.out` | yes |
+  | `logs/` | `decisions-<date>.md` (tracked); train and gate logs (untracked) | partly |
+  | `plans/` | plans, batches, approved mockups | yes |
+  | `run/` | `merge.lock`, `merge-priority`, pause files, `model-overrides.txt` | overrides only |
+  | `archive/<yyyy-mm>/` | finished one-off scripts, prompts, old notes | text only |
+  | `artifacts/<yyyy-mm>/` | screenshots, scratch databases, large logs | no |
+
+  Optionally make the state dir a private git repo with a whitelist `.gitignore` and push it hourly.
 - **Scripts.** `S=~/.claude/skills/orchestrate/scripts`. All read `orch-env.sh` (env vars documented there;
   per-repo overrides in `$ORCH_STATE/env.sh`).
-- **Decisions log.** Append to `$ORCH_STATE/decisions-<date>.md`: one line per decision, ruling, merge, failure, miss.
+- **Decisions log.** Append to `$ORCH_LOGS/decisions-<date>.md`: one line per decision, ruling, merge, failure, miss.
 - **15-minute check.** Create it with CronCreate (`7,22,37,52 * * * *`, recurring) using the prompt in §9. Tell the
   user cron jobs are session-only (gone when the session ends, auto-expire after 7 days) and re-create them on resume.
 - **Supplementary watcher (optional).** `$S/watch-all.sh` with the harness's `run_in_background` (never `&`);
@@ -31,13 +46,13 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 - **Naming.** branch `area-tN` (kebab); stem = branch with `-` removed (`area-t3` → `areat3`);
   worktree `$ORCH_WT_PREFIX<stem>` (default `<repo>-<stem>`).
-- **Files in `$ORCH_STATE`:**
-  - `brief-<name>.md` — what to build; shared rules in a common brief (`templates/brief-common.md`).
-  - `<branch>-report.md` — builder's report: root cause, change, tests red→green, docs, owner questions.
-  - `<stem>-review<N>.md` — verdict; **first line exactly `PASS` or `FAIL`**, then findings with `file:line`.
-  - `pr/<stem>.txt` — line 1 title, blank line, body, a line `[GATES]`, blank line, attribution line.
-    `merge-pr.sh` replaces `[GATES]` with the gate summary.
-  - `pipe-<branch>.out` — merge-train output (start every pipeline with `run-pipe.sh`).
+- **Files:**
+  - `briefs/<branch>.md` — what to build; shared rules in `briefs/common.md` (from `templates/brief-common.md`).
+  - `reports/<branch>.md` — builder's report: root cause, change, tests red→green, docs, owner questions.
+  - `reviews/<stem>-review<N>.md` — verdict; **first line exactly `PASS` or `FAIL`**, then findings with `file:line`.
+  - `pr/<stem>.txt` — **line 1 the title**, blank line, body, a line `[GATES]`, blank line, attribution line.
+    `merge-pr.sh` replaces `[GATES]` with the gate summary. Check line 1 is a title, not a body sentence.
+  - `pipes/<branch>.out` — pipeline and merge-train output (start every pipeline with `run-pipe.sh`).
 - **Create a worktree:** `git worktree add -b <branch> <repo>-<stem> origin/main`.
 - **Builder** (agent `orch-builder`, or an external lane): one brief, one branch, push, no PR, report.
 - **Review** (agent `orch-reviewer`): against `git merge-base origin/main HEAD` (or the parent for stacked branches).
@@ -46,9 +61,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - **Chained external lanes:** `launch.sh` is single-stage (starts one lane and stops). `pipeline.sh` chains
   build → report check → review → PR text → merge train: `$S/run-pipe.sh <branch> $S/pipeline.sh <branch> '<deps>|-' [full]`.
   For an already-built branch run `review-chain.sh <stem> <branch>`; `CHAIN_NO_MERGE=1` stops after the PR text.
-  A failed review prints `CHAIN FAIL <stem>: <verdict head>`; the 15-minute check must grep `pipe-*.out` for it.
+  A failed review prints `CHAIN FAIL <stem>: <verdict head>`; the 15-minute check must grep `pipes/*.out` for it.
 - **Stacked branches:** create from `origin/<parent>`; queue with
-  `$S/wait-merged.sh <parent> $ORCH_STATE/pr/<stem>.txt -- $S/run-pipe.sh <branch> $S/merge-seq.sh ...`.
+  `$S/wait-merged.sh <#parent-PR> $ORCH_PR/<stem>.txt -- $S/run-pipe.sh <branch> $S/merge-seq.sh ...`.
   **Never** wait on `git merge-base --is-ancestor origin/<parent> ...`: the parent ref is deleted on merge.
 - **Migrations / ordered artifacts:** before queuing, compare timestamps with every pending branch; rename so they
   land in order.
@@ -77,11 +92,11 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 ## 4. Merge train
 
-- `merge-seq.sh` serializes merges with `$ORCH_STATE/merge.lock`: merge main into the lane → optional local gates →
+- `merge-seq.sh` serializes merges with `$ORCH_RUN/merge.lock`: merge main into the lane → optional local gates →
   push → PR create/update → wait for **every check on the exact pushed commit** → `gh pr merge --match-head-commit`
-  → delete worktree + branch. Optional two-deep speculation (`$ORCH_STATE/merge-spec` = `on`); leave off when gates
+  → delete worktree + branch. Optional two-deep speculation (`$ORCH_RUN/merge-spec` = `on`); leave off when gates
   are CI-only.
-- **Outcomes you must act on** (in `pipe-<branch>.out`):
+- **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list
     entries: keep every side, dedupe, run the formatter and the registry test), commit
     "Merged current main into the <branch> branch.", push, requeue. Otherwise a resolver agent.
@@ -98,7 +113,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   stack batch B on batch A, write one combined PR text per batch, queue A, then B after A's PR merges. Exclude
   batched branches from the stalled-branch scan. Behavior-changing branches stay individual.
 - **Merge priority.** A batch that keeps losing the lock to small branches re-conflicts each time; write its stem
-  to `$ORCH_STATE/merge-priority` so it takes the lock next, and clear the file once it merges.
+  to `$ORCH_RUN/merge-priority` so it takes the lock next, and clear the file once it merges.
 - **Grouped runs.** For a large planned run (many lanes from one plan), split the work into groups by code area and
   run **one group at a time**: lanes inside a group may build in parallel, the group merges as one batch PR, and the
   next group starts from the new main. Put infra and capture-tooling fixes in the first group so later groups build
@@ -127,10 +142,10 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   multiple choice (2–4 options), recommended option first with "(Recommended)", plain words, no internal IDs.
 - Follow-ups that a ruling raises (e.g. "what does the other actor see?") are separate questions.
 - Technical defaults (internal consistency, fences, logging, cleanup) you take yourself — log them as `DEFAULT:`.
-- Keep a pending-questions file in `$ORCH_STATE`; ask in batches, one at a time, when the user says they are ready.
+- Keep a pending-questions file in `$ORCH_PLANS`; ask in batches, one at a time, when the user says they are ready.
 - When a reviewer or builder raises a policy question, do not let it guess: it goes to the list.
 - **UI decisions**: when a layout choice is the user's, make a quick static mockup and show it (for example in a
-  browser tab beside the terminal) before building; the approved mockup becomes the lane's spec, saved in `$ORCH_STATE`.
+  browser tab beside the terminal) before building; the approved mockup becomes the lane's spec, saved in `$ORCH_PLANS`.
 - **Overnight / away mode** (user says so): no questions; recommended defaults; log every decision; build, review,
   merge after green CI; never deploy; prepare a morning summary (§8).
 
@@ -162,9 +177,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 ```
 Run the 15-minute independent train check (the user's standing rule: a timer must watch every 15 minutes and cannot depend on any other watcher). Do NOT rely on watch-all.sh or waiter loops; check ground truth. State dir: $ORCH_STATE (see ~/.claude/skills/orchestrate/SKILL.md).
 (1) git fetch; gh pr list --state open; git log --oneline -8 origin/main.
-(2) grep -h "CHAIN FAIL" $ORCH_STATE/pipe-*.out (a failed review or lane: act on it). For each branch in flight: tail -5 $ORCH_STATE/pipe-<branch>.out (check the file time; ignore lines older than the latest requeue) and ps for merge-seq.sh. An rc=3 CONFLICT, MERGE FAIL CI or push rejection with no live merge-seq for that branch and no resolver running is UNHANDLED: dispatch a fix now (resolve mechanical conflicts yourself), then requeue.
-(3) Scan every $ORCH_STATE/*-report.md modified today (external lanes do NOT notify; this scan is how you learn they finished). Skip branches listed in $ORCH_STATE/batches.md. STALLED = no <stem>-review*.md, or a PASS review without pr/<stem>.txt, or both but no pipe-<branch>.out and no live merge-seq. Advance it (review → PR text → merge-seq).
-(4) External lanes launched since the last check: verify they actually started (new commits / dirty worktree / lane-busy.sh; WAITING lines in pipe-launch-waits.out mean a gate is holding them).
+(2) grep -h "CHAIN FAIL" $ORCH_PIPES/*.out (a failed review or lane: act on it). For each branch in flight: tail -5 $ORCH_PIPES/<branch>.out (check the file time; ignore lines older than the latest requeue) and ps for merge-seq.sh. An rc=3 CONFLICT, MERGE FAIL CI or push rejection with no live merge-seq for that branch and no resolver running is UNHANDLED: dispatch a fix now (resolve mechanical conflicts yourself), then requeue.
+(3) Scan every $ORCH_REPORTS/*.md modified today (external lanes do NOT notify; this scan is how you learn they finished). Skip branches listed in $ORCH_PLANS/batches.md. STALLED = no reviews/<stem>-review*.md, or a PASS review without pr/<stem>.txt, or both but no pipes/<branch>.out and no live merge-seq. Advance it (review → PR text → merge-seq).
+(4) External lanes launched since the last check: verify they actually started (new commits / dirty worktree / lane-busy.sh; WAITING lines in pipes/launch-waits.out mean a gate is holding them).
 (5) Batches and gated rows: queue a batch when its report and PR text exist; queue a stacked branch or start a gated lane only after its parent's PR shows MERGED.
 (6) Any waiter looping > 30 min: verify its condition still makes sense (PR merged state, never parent refs).
 (7) Main CI on the newest commit: gh run list --branch main -L 3.
@@ -205,5 +220,18 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Source-scan tests break on refactors that move strings** — tests that assert a literal appears in a specific
   file fail when a refactor centralizes that text. Point the test at the new owner file rather than duplicating text.
 - **Blank linter output is not a pass** — confirm the exit code or the "No fixes applied" line before pushing.
+- **State kept in /tmp was lost on reboot** — everything lives in `$ORCH_STATE` (typed subfolders, a private git
+  repo pushed hourly); never a /tmp symlink. Archiving a file a live script reads breaks it: grep every script for
+  a file's name before moving it.
+- **A batch of separately reviewed lanes still failed CI** — tests outside every lane's own files went stale: factory
+  mocks missing a newly exported function, fixtures asserting a rule the batch changed, contract tests (one-sentence
+  copy, refusal registries, demo navigation). Before queuing a batch, run each lane's changed unit tests, the
+  contract and guard tests, and every unit test that factory-mocks a module the batch changed.
+- **merge-priority named the wrong stem** — the train waited 10 minutes for a stem that was never queued. Write the
+  exact queued stem, and clear the file after the merge.
+- **A requeued, unchanged commit failed again at once** — the train reuses the exact commit's CI result. After a
+  flake, rerun the failed job (`gh run rerun <id> --failed`) before requeuing.
+- **A PR title was a body sentence** — the PR-text lane left out the title line. Check line 1 of `pr/<stem>.txt`.
+- **Review loops kept finding new HIGHs** — after the first fix round, review only the delta (`templates/delta-review-prompt.md`).
 - **Docs screenshots drift visually** — capture tooling must enforce one framing (uniform margin of page background);
   add a check so tightly cropped captures fail, and fix the tool before any lane recaptures.

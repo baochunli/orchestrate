@@ -4,7 +4,7 @@ Your launch prompt names ONE row (e.g. "row R7: <module/field>"). The inventory 
 line numbers there may be stale — re-grep on current code.
 
 ## Before you start
-- Read `$ORCH_STATE/brief-common.md` and the project config.
+- Read `$ORCH_BRIEFS/common.md` and the project config.
 - Read the target pattern/kit (`<path>`) and the closest already-merged example (`<path>`).
 - Time box: ~2.5 h. Keep the branch small.
 

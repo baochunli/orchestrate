@@ -1,4 +1,4 @@
-# Common rules for every builder (copy to $ORCH_STATE/brief-common.md and fill the <placeholders>)
+# Common rules for every builder (copy to $ORCH_BRIEFS/common.md and fill the <placeholders>)
 
 Read the project config first: `<repo>/.claude/orchestrate.md`. It wins over anything here.
 
@@ -18,5 +18,5 @@ Read the project config first: `<repo>/.claude/orchestrate.md`. It wins over any
 - **Gates** (once, on the final commit): `<gate commands>`.
 - **Never:** `<forbidden actions, e.g. git stash, pkill, real env files, the real DB port, deploys>`.
 - **Commits:** past tense; end with `<attribution trailer>`. Push to `origin <branch>`; do NOT open a PR.
-- **Report** to `$ORCH_STATE/<branch>-report.md`: root cause, the change (file:line), tests (red then green, with
+- **Report** to `$ORCH_REPORTS/<branch>.md`: root cause, the change (file:line), tests (red then green, with
   counts), docs/screenshot changes, owner questions. Then reply with the SHA and a 4-line summary.

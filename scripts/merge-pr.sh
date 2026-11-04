@@ -1,11 +1,11 @@
 #!/bin/bash
 # usage: merge-pr.sh <stem> <branch> <prfile-stem> "<gates text>"
-# Pushes the lane, creates or updates its PR from $ORCH_STATE/pr/<prfile-stem>.txt (line 1 = title, line 3+ = body,
+# Pushes the lane, creates or updates its PR from $ORCH_PR/<prfile-stem>.txt (line 1 = title, line 3+ = body,
 # "[GATES]" replaced by the gates text), waits for every check on the EXACT pushed commit (ORCH_CI_GATE=on), merges
 # with --match-head-commit, then removes the worktree and branch. Prints "MERGE FAIL ..." and leaves the PR open on failure.
 set -euo pipefail
 . "$(dirname "$0")/orch-env.sh"
-wt=$ORCH_WT_PREFIX$1; br=$2; pf=$ORCH_STATE/pr/$3.txt; gates=$4
+wt=$ORCH_WT_PREFIX$1; br=$2; pf=$ORCH_PR/$3.txt; gates=$4
 [ -s "$pf" ] || { echo "MERGE FAIL: no PR text at $pf"; exit 1; }
 cd "$wt"; git fetch -q "$ORCH_REMOTE"
 git merge-base --is-ancestor "$ORCH_REMOTE/$ORCH_MAIN" HEAD || { echo "MERGE FAIL STALE: $ORCH_MAIN moved"; exit 1; }

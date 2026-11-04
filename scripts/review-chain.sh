@@ -8,7 +8,7 @@
 # Optional text appended to the prompts: REVIEW_EXTRA, PRTEXT_EXTRA (e.g. project rules, PR content notes).
 # Models (launch.sh applies model-overrides.txt on top): REVIEW_MODEL/REVIEW_EFFORT, PRTEXT_MODEL/PRTEXT_EFFORT,
 # each falling back to ORCH_MODEL/ORCH_EFFORT (set in the environment or $ORCH_STATE/env.sh). KIND picks the CLI.
-# $ORCH_STATE/extra-review-<stem> (any content) adds a second independent review (REVIEW2_MODEL, default
+# $ORCH_RUN/extra-review-<stem> (any content) adds a second independent review (REVIEW2_MODEL, default
 # REVIEW_MODEL); merging then needs both PASS.
 # CHAIN_NO_MERGE=1 stops after the PR text ("READY"), for batch merges.
 set -u
@@ -18,7 +18,7 @@ RM=${REVIEW_MODEL:-${ORCH_MODEL:-}}; RE=${REVIEW_EFFORT:-${ORCH_EFFORT:-high}}
 PM=${PRTEXT_MODEL:-${ORCH_MODEL:-}}; PE=${PRTEXT_EFFORT:-${ORCH_EFFORT:-high}}
 [ -n "$RM" ] && [ -n "$PM" ] || { echo "CHAIN FAIL $stem: set REVIEW_MODEL and PRTEXT_MODEL (or ORCH_MODEL)"; exit 1; }
 [ -d "$wt" ] || { echo "CHAIN FAIL $stem: worktree $wt missing"; exit 1; }
-brief=$S/brief-$br.md; report=$S/$br-report.md; v1=$S/$stem-review1.md; v2=$S/$stem-review2.md; prf=$S/pr/$stem.txt
+brief=$ORCH_BRIEFS/$br.md; report=$ORCH_REPORTS/$br.md; v1=$ORCH_REVIEWS/$stem-review1.md; v2=$ORCH_REVIEWS/$stem-review2.md; prf=$ORCH_PR/$stem.txt
 sha=$(git -C "$wt" rev-parse --short HEAD)
 ts=$(date +%s); for f in "$v1" "$v2" "$prf"; do [ -e "$f" ] && mv "$f" "$f.stale-$ts"; done
 lane() { herdr agent get "$1" 2>/dev/null | grep -q agent_status; }
@@ -38,7 +38,7 @@ RP="$(subst "$RT" "$v1" "$v1") ${REVIEW_EXTRA:-}"
 MODEL=$RM "$ORCH_SKILL_DIR/launch.sh" "$LP-$stem-rev" "$wt" "$RE" "$RP" >/dev/null
 sleep 30; lane "$LP-$stem-rev" || { echo "CHAIN FAIL $stem: review lane not registered"; exit 1; }
 second=0
-if [ -f "$S/extra-review-$stem" ]; then second=1
+if [ -f "$ORCH_RUN/extra-review-$stem" ]; then second=1
   RP2="$(subst "$RT" "$v2" "$v2") ${REVIEW_EXTRA:-} Work independently of any other reviewer."
   MODEL=${REVIEW2_MODEL:-$RM} "$ORCH_SKILL_DIR/launch.sh" "$LP-$stem-rev2" "$wt" "$RE" "$RP2" >/dev/null
 fi
