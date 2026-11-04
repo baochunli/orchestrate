@@ -93,6 +93,12 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   lock holder alone), merge them into 1–3 batch branches (`templates/resolver-prompt.md` style, "keep every side"),
   stack batch B on batch A, write one combined PR text per batch, queue A, then B after A's PR merges. Exclude
   batched branches from the stalled-branch scan. Behavior-changing branches stay individual.
+- **Merge priority.** A batch that keeps losing the lock to small branches re-conflicts each time; write its stem
+  to `$ORCH_STATE/merge-priority` so it takes the lock next, and clear the file once it merges.
+- **Grouped runs.** For a large planned run (many lanes from one plan), split the work into groups by code area and
+  run **one group at a time**: lanes inside a group may build in parallel, the group merges as one batch PR, and the
+  next group starts from the new main. Put infra and capture-tooling fixes in the first group so later groups build
+  on them. Put cross-cutting sweeps (anything that touches every module) alone in the last group.
 - After a user deploy, log which commit it took; list pending migrations for the next deploy.
 
 ## 5. External lanes
@@ -102,6 +108,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - At the next check after launch, verify activity (new commits or a dirty worktree, or `lane-busy.sh`). A launch can
   be silently held (queue gate, pause file): `launch.sh` prints `WAITING (queue gate)` and `STARTED`; check for them.
 - One external lane at a time unless the config says otherwise.
+- The user may route a whole run to external models ("no internal agents tonight"): then builds, reviews, fix rounds
+  and PR text all go through `launch.sh`, and the session only supervises. Respect pause files: schedule the start
+  with a one-shot cron at the pause end instead of overriding it, and confirm with the user if the timing conflicts.
 
 ## 6. Asking the user
 
@@ -111,6 +120,8 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - Technical defaults (internal consistency, fences, logging, cleanup) you take yourself — log them as `DEFAULT:`.
 - Keep a pending-questions file in `$ORCH_STATE`; ask in batches, one at a time, when the user says they are ready.
 - When a reviewer or builder raises a policy question, do not let it guess: it goes to the list.
+- **UI decisions**: when a layout choice is the user's, make a quick static mockup and show it (for example in a
+  browser tab beside the terminal) before building; the approved mockup becomes the lane's spec, saved in `$ORCH_STATE`.
 - **Overnight / away mode** (user says so): no questions; recommended defaults; log every decision; build, review,
   merge after green CI; never deploy; prepare a morning summary (§8).
 
@@ -182,3 +193,8 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   rerun only the failed job (`gh run rerun <id> --failed`) instead of fixing the branch.
 - **The cron check only fires while the session is idle** — a pending question or a long turn skips it. Don't leave
   a question open for long while lanes are in flight, and after any long turn run the check by hand.
+- **Source-scan tests break on refactors that move strings** — tests that assert a literal appears in a specific
+  file fail when a refactor centralizes that text. Point the test at the new owner file rather than duplicating text.
+- **Blank linter output is not a pass** — confirm the exit code or the "No fixes applied" line before pushing.
+- **Docs screenshots drift visually** — capture tooling must enforce one framing (uniform margin of page background);
+  add a check so tightly cropped captures fail, and fix the tool before any lane recaptures.
