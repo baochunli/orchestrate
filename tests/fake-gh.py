@@ -5,6 +5,8 @@ PR state is derived like GitHub: MERGED once the PR head commit is in main, CLOS
 CI for a commit (only commits that are, or were, a PR head) is decided by its tree:
   file "early-red"                 -> job "unit" fails
   files "needs-old-api" and "new-api" -> job "unit" fails (a branch that only breaks on top of the new main)
+  files "pair-a" and "pair-b"      -> job "unit" fails (two branches, each green alone, red together)
+$FAKE_GH/fail-view present          -> `pr view` fails (GitHub unreachable)
   file "slow"                      -> pending for $FAKE_SLOW queries (default 8), else $FAKE_PENDING (default 2)
 Every commit whose CI reached a verdict is appended once to $FAKE_GH/ci-runs.log ("<sha> pass|fail").
 """
@@ -46,7 +48,7 @@ def view(p):
 def ci(sha):
     if not any(sha in p.get("heads", []) for p in allprs()): return None
     files = set(git("ls-tree", "-r", "--name-only", sha).stdout.split())
-    red = "early-red" in files or {"needs-old-api", "new-api"} <= files
+    red = "early-red" in files or {"needs-old-api", "new-api"} <= files or {"pair-a", "pair-b"} <= files
     need = int(os.environ.get("FAKE_SLOW", 8)) if "slow" in files else int(os.environ.get("FAKE_PENDING", 2))
     cf = f"{ST}/ci/{sha}"; n = int(open(cf).read()) if os.path.exists(cf) else 0
     n += 1; open(cf, "w").write(str(n))
@@ -89,6 +91,7 @@ elif c == "create":
 elif c == "edit":
     p = load(num(a[2])); p["title"] = opt(a, "--title", p["title"]); save(p)
 elif c == "view":
+    if os.path.exists(f"{ST}/fail-view"): sys.exit("fake gh: HTTP 502")
     out(view(refresh(load(num(a[2])))), a)
 elif c == "checks":
     p = refresh(load(num(a[2]))); v = ci(p["oid"])

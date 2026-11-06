@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2015,SC2012  # ok/bad chains and ls counts are deliberate in this harness
 # usage: batch-test.sh [scenario...]   (default: all)  — local merge-train tests: a bare origin, a fake gh, no GitHub.
-# Scenarios: green conflict mates bisect early single
+# Scenarios: green conflict mates bisect pair gherr early single
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); S=${ORCH_TEST_SCRIPTS:-$(cd "$HERE/../scripts" && pwd)}
 FAILS=0
@@ -35,7 +35,7 @@ hold() { mkdir "$ORCH_STATE/run/merge.lock"; sleep 900 & HOLD=$!; echo $HOLD > "
 queue() { local n; for n in "$@"; do "$S/merge-seq.sh" "$n:$n-t1:$n" > "$T/out-$n" 2>&1 & PIDS+=($!); done; }
 release_when_queued() { # release the held lock once all <n> items sit in the batch queue (so they batch together)
   local _; for _ in $(seq 120); do [ "$(ls "$ORCH_STATE/run/batch-queue" 2>/dev/null | wc -l | tr -d ' ')" -ge "$1" ] && break; sleep 1; done
-  kill "$HOLD"; wait "$HOLD" 2>/dev/null; }
+  [ "${2:-1}" = 0 ] || { kill "$HOLD"; wait "$HOLD" 2>/dev/null; }; }
 finish_all() { local p; for p in "${PIDS[@]}"; do wait "$p"; done
   for _ in $(seq 60); do [ -d "$ORCH_STATE/run/merge.lock" ] || break; sleep 1; done; }
 has() { grep -qF -- "$2" "$T/out-$1"; }
@@ -82,6 +82,29 @@ t_mates() {
   grep -q "m2: conflicts only with batch-mates; next round" "$ORCH_STATE/pipes/merge-batch.out" && ok "m2 deferred once" || bad "no deferral logged"
   [ "$(grep -c "conflicts only with batch-mates" "$ORCH_STATE/pipes/merge-batch.out")" = 1 ] && ok "no repeated rounds" || bad "deferral repeated"
 }
+t_pair() {
+  echo "== pair: a1 and b1 are green alone but red together, in different halves: a1 merges, b1 is isolated"; setup
+  lane a1 pair-a; lane a2 fa2; lane b1 pair-b; lane b2 fb2
+  hold; queue a1 a2 b1 b2; release_when_queued 4; finish_all; show a1 a2 b1 b2
+  for n in a1 a2 b2; do has $n "merged" && [ "$(pr_state $n)" = MERGED ] && ok "$n merged" || bad "$n not merged"; done
+  has b1 "MERGE FAIL CI: unit failed on" && has b1 "(isolated in batch)" && ok "b1: MERGE FAIL CI ... (isolated in batch)" || bad "b1 isolation line missing"
+  local c red=0; for c in $(git -C "$FAKE_BARE" rev-list main); do
+    git -C "$FAKE_BARE" ls-tree -r --name-only "$c" | grep -qx pair-a && git -C "$FAKE_BARE" ls-tree -r --name-only "$c" | grep -qx pair-b && red=1; done
+  [ "$red" = 0 ] && ok "main never held the red combination" || bad "main went red"
+}
+t_gherr() {
+  echo "== gherr: while gh fails the runner frees merge.lock and backs off; the item merges once gh recovers"; setup
+  export ORCH_BATCH_BACKOFF=3; lane a fa
+  hold; queue a; release_when_queued 1 0; touch "$FAKE_GH/fail-view"; kill "$HOLD"; wait "$HOLD" 2>/dev/null
+  local _; for _ in $(seq 60); do grep -q "releasing merge.lock" "$ORCH_STATE/pipes/merge-batch.out" 2>/dev/null && break; sleep 1; done
+  [ ! -d "$ORCH_STATE/run/merge.lock" ] && ok "merge.lock free during the backoff" || bad "lock still held"
+  sleep 2; grep -q "gh errors (1): releasing merge.lock" "$ORCH_STATE/pipes/merge-batch.out" && ok "runner released the lock on gh errors" || bad "no release logged"
+  [ -s "$ORCH_STATE/run/batch-backoff" ] && ok "backoff recorded" || bad "no backoff file"
+  rm -f "$FAKE_GH/fail-view"; finish_all; show a
+  has a "merged" && ok "a merged after gh recovered" || bad "a not merged"
+  [ "$(grep -c "runner .* started" "$ORCH_STATE/pipes/merge-batch.out")" -ge 2 ] && ok "a new runner took over" || bad "no second runner"
+  unset ORCH_BATCH_BACKOFF
+}
 t_early() {
   echo "== early CI: an early-red branch is evicted before batching; a slow (pending) branch is waited for"; setup
   lane a fa; lane f early-red; lane g slow
@@ -102,6 +125,6 @@ t_single() {
   tail -1 "$T/out-a" | grep -q "Merge pull request #1 from a-t1" && ok "last line is the main commit" || bad "last line: $(tail -1 "$T/out-a")"
   grep -q "Gates: full suite in PR CI" "$ORCH_STATE/pr/a.txt" && ok "[GATES] replaced" || bad "[GATES] not replaced"
 }
-[ $# -gt 0 ] || set -- green conflict mates bisect early single
+[ $# -gt 0 ] || set -- green conflict mates bisect pair gherr early single
 for t in "$@"; do "t_$t"; done
 echo "== $FAILS failure(s)"; [ "$FAILS" = 0 ]

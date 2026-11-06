@@ -21,7 +21,7 @@
 # + CONFLICT + files, "MERGE FAIL STALE/DIRTY/PUSH". Runner log: $ORCH_PIPES/merge-batch.out.
 . "$(dirname "$0")/orch-env.sh"
 D=$ORCH_RUN; L=$D/merge.lock; P=$D/merge-priority; Q=$D/batch-queue; R=$D/batch-result; BIN=$ORCH_SKILL_DIR
-EARLY_MAX=${ORCH_BATCH_EARLY_MAX:-1200}
+EARLY_MAX=${ORCH_BATCH_EARLY_MAX:-1200}; BACKOFF=${ORCH_BATCH_BACKOFF:-120}
 mkdir -p "$Q" "$R"
 nap() { sleep "${ORCH_CI_SLEEP:-$1}"; }
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
@@ -40,6 +40,7 @@ enqueue() {
 }
 spawn_runner() {
   local lp p; lp=$(lock_pid)
+  [ "$(date +%s)" -lt "$(cat "$D/batch-backoff" 2>/dev/null || echo 0)" ] && return 0   # gh was failing: back off
   if [ ! -d "$L" ] || { [ -n "$lp" ] && ! alive "$lp"; }; then
     p=$(prio); { [ -z "$p" ] || [ -f "$Q/$p" ]; } || return 0
     (nohup "$BIN/merge-batch.sh" runner >> "$ORCH_PIPES/merge-batch.out" 2>&1 < /dev/null &)
@@ -197,7 +198,10 @@ green() {
   git -C "$RW" checkout -q --detach 2>/dev/null; git -C "$RW" branch -q -D "$CAND_NAME" 2>/dev/null
   git push -q "$ORCH_REMOTE" --delete "$CAND_NAME" 2>/dev/null || true
 }
-# attempt <isolated 0|1> <stem>...: one candidate; on red, bisect into halves (each fresh from main).
+# attempt <isolated 0|1> <stem>...: one candidate; on red, bisect into halves processed one after the other, each
+# rebuilt from the CURRENT remote main: once half 1 merges, half 2 runs on main + half 1, so a failure that needs a
+# branch from each half reappears in half 2 and bisection continues there. Nothing merges unless its base is the
+# current main (candidate: main unchanged check + --match-head-commit; single train: merge-pr.sh STALE check).
 attempt() {
   local iso=$1; shift
   [ $# -eq 0 ] && return
@@ -217,13 +221,14 @@ attempt() {
        else for s in "${in[@]}"; do finish "$s" "MERGE FAIL: batch: $CAND_FAIL (PR left open)"; done; fi ;;
   esac
 }
-# round: returns 1 when the queue is empty.
+# round: returns 1 when the queue is empty, 2 when gh is failing (the runner exits and frees the lock; waiting
+# items start a new runner after $ORCH_RUN/batch-backoff, ORCH_BATCH_BACKOFF seconds, default 120).
 round() {
-  local max t0 s url head st oid e all ready pend now pp
+  local max t0 s url head st oid e all ready pend now pp gherr
   max=$(cat "$D/merge-batch-max" 2>/dev/null); case "$max" in ''|*[!0-9]*|0) max=8 ;; esac
   t0=$(date +%s)
   while :; do
-    all=(); ready=(); pend=0; pp=; now=$(date +%s)
+    all=(); ready=(); pend=0; pp=; gherr=0; now=$(date +%s)
     for s in $(order); do
       alive "$(qget "$s" owner)" || { rm -f "$Q/$s"; log "$s: merge-seq gone; dropped"; continue; }
       url=$(qget "$s" url); head=$(qget "$s" head)
@@ -232,7 +237,7 @@ round() {
         OPEN) ;;
         MERGED) git -C "$ORCH_REPO" fetch -q "$ORCH_REMOTE" "$ORCH_MAIN"; finish "$s" "merged" "$(git -C "$ORCH_REPO" log --oneline -1 "$ORCH_REMOTE/$ORCH_MAIN" | cat)"; continue ;;
         CLOSED) finish "$s" "MERGE FAIL: $url is closed"; continue ;;
-        *) pend=$((pend + 1)); continue ;;   # gh hiccup: look again next poll
+        *) gherr=$((gherr + 1)); continue ;;   # gh error
       esac
       [ "$oid" = "$head" ] || { moved "$s"; continue; }
       e=$(early "$url")
@@ -243,6 +248,8 @@ round() {
            else pend=$((pend + 1)); [ "$s" = "$(prio)" ] && pp=1; fi ;;
       esac
     done
+    if [ "$gherr" -gt 0 ] && [ ${#ready[@]} -eq 0 ]; then   # never hold merge.lock while GitHub is unreachable
+      echo $((now + BACKOFF)) > "$D/batch-backoff"; log "gh errors ($gherr): releasing merge.lock, retry in ${BACKOFF}s"; return 2; fi
     [ ${#all[@]} -eq 0 ] && [ "$pend" -eq 0 ] && return 1
     [ ${#all[@]} -eq 1 ] && { ready=("${all[@]}"); break; }   # a lone item runs at once, like the classic train
     [ ${#ready[@]} -ge "$max" ] && [ -z "$pp" ] && break   # a pending priority stem holds the batch (bounded)
@@ -262,7 +269,7 @@ runner() {
   log "runner $$ started"; close_stale_batches
   while :; do
     p=$(prio); if [ -n "$p" ] && [ ! -f "$Q/$p" ]; then log "merge-priority names $p, not in the batch queue: yielding the lock"; exit 0; fi
-    round || { log "runner $$: queue empty, exiting"; exit 0; }
+    round; case $? in 1) log "runner $$: queue empty, exiting"; exit 0 ;; 2) exit 0 ;; esac
     nap "$ORCH_POLL"   # never spin: a round that changed nothing must not repeat at once
   done
 }

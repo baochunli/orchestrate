@@ -108,18 +108,21 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     merge (merge commit) and every item PR shows MERGED; items print `GitHub CI passed on batch <url>`, `merged`,
     the main commit line. An item PR not marked MERGED within a minute gets a `note: ... not marked MERGED` line
     (left open; check it). Batch branches are deleted; a dead runner's open batch PRs are closed by the next runner.
-  - **Red batch → bisect:** close the candidate, split in halves, each half a fresh candidate from the new main, down
-    to single trains; the culprit prints `MERGE FAIL CI: ... (isolated in batch)`, everything else merges.
-    Limits: a failure that needs two branches together (each green alone) passes both halves and lands on main;
-    CI timeouts are not bisected (every item gets `MERGE FAIL CI: ... (batch <url>; PR left open)`: requeue).
+  - **Red batch → bisect:** close the candidate, split in halves and run them one after the other, each rebuilt
+    from the CURRENT main, down to single trains; the culprit prints `MERGE FAIL CI: ... (isolated in batch)`,
+    everything else merges. A failure that needs two branches together (each green alone) reappears in the second
+    half (main + first half + second half) and is isolated there; nothing merges unless its base is the current
+    main. CI timeouts are not bisected (every item gets `MERGE FAIL CI: ... (batch <url>; PR left open)`: requeue).
   - **Conflicts:** a branch that conflicts with main is evicted with `<wt> TRAIN rc=3` + `CONFLICT` + files; one that
     only conflicts with a batch-mate waits for the next round (then main contains the mate).
+  - While `gh` fails, the runner frees `merge.lock` and exits; waiting items start a new runner after
+    `$ORCH_RUN/batch-backoff` (`ORCH_BATCH_BACKOFF`, default 120 s).
   - Stopping a waiting merge-seq by PID removes its item from the queue (never stop the runner mid-candidate).
   - A candidate merge that fails without conflict markers (a commit hook, a missing commit) evicts that item with
     `MERGE FAIL: batch merge of <branch> failed` + the git output. The batch worktree `${ORCH_WT_PREFIX}batch` is a
     plain `git worktree add` (no dependency install): if the repo has merge/commit hooks that need dependencies,
     set them up there once.
-  - Tests: `tests/batch-test.sh` (bare origin + fake `gh`; green, conflict, mates, bisect, early, single).
+  - Tests: `tests/batch-test.sh` (bare origin + fake `gh`; green, conflict, mates, bisect, pair, gherr, early, single).
 - **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list
     entries: keep every side, dedupe, run the formatter and the registry test), commit
