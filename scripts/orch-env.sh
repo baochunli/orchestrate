@@ -25,7 +25,7 @@ ORCH_PR=${ORCH_PR:-$ORCH_STATE/pr}                  # <stem>.txt (line 1 title)
 ORCH_PIPES=${ORCH_PIPES:-$ORCH_STATE/pipes}         # <name>.out (pipeline and merge-train output)
 ORCH_LOGS=${ORCH_LOGS:-$ORCH_STATE/logs}            # decisions-<date>.md; train/gate logs (untracked)
 ORCH_PLANS=${ORCH_PLANS:-$ORCH_STATE/plans}         # plans, batches, mockups
-ORCH_RUN=${ORCH_RUN:-$ORCH_STATE/run}               # locks, merge-priority, pause files, model-overrides.txt
+ORCH_RUN=${ORCH_RUN:-$ORCH_STATE/run}               # merge.lock, merge-queue/, merge-result/, pause files, model-overrides.txt
 ORCH_ARTIFACTS=${ORCH_ARTIFACTS:-$ORCH_STATE/artifacts}  # screenshots, scratch databases, large logs (untracked)
 mkdir -p "$ORCH_BRIEFS" "$ORCH_REPORTS" "$ORCH_REVIEWS" "$ORCH_PR" "$ORCH_PIPES" "$ORCH_LOGS" "$ORCH_PLANS" "$ORCH_RUN" "$ORCH_ARTIFACTS"
 ORCH_WT_PREFIX=${ORCH_WT_PREFIX:-$ORCH_REPO-}

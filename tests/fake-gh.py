@@ -8,7 +8,9 @@ CI for a commit (only commits that are, or were, a PR head) is decided by its tr
   files "pair-a" and "pair-b"      -> job "unit" fails (two branches, each green alone, red together)
 a PR head that conflicts with main gets no checks at all (like GitHub); `pr view` reports mergeable
 $FAKE_GH/fail-view present          -> `pr view` fails (GitHub unreachable)
+  file "flaky"                     -> the first run on a commit fails, a rerun (`gh run rerun --failed`) passes
   file "slow"                      -> pending for $FAKE_SLOW queries (default 8), else $FAKE_PENDING (default 2)
+Every CI start (a new head on an open PR, or a rerun) is appended to $FAKE_GH/triggers.log.
 Every commit whose CI reached a verdict is appended once to $FAKE_GH/ci-runs.log ("<sha> pass|fail").
 """
 import fcntl, json, os, subprocess, sys
@@ -36,7 +38,10 @@ def num(u): return int(str(u).rstrip("/").split("/")[-1].lstrip("#"))
 def refresh(p):
     if p["state"] == "OPEN":
         h = ref(p["head"])
-        if h: p["oid"] = h; p.setdefault("heads", []); h in p["heads"] or p["heads"].append(h)
+        if h:
+            p["oid"] = h; p.setdefault("heads", [])
+            if h not in p["heads"]:
+                p["heads"].append(h); open(f"{ST}/triggers.log", "a").write(f"#{p['number']} {p['head']} {h}\n")
         main = ref("main")
         if p.get("oid") and main and is_anc(p["oid"], main): p["state"] = "MERGED"
         save(p)
@@ -55,12 +60,12 @@ def ci(sha):
     files = set(git("ls-tree", "-r", "--name-only", sha).stdout.split())
     red = "early-red" in files or {"needs-old-api", "new-api"} <= files or {"pair-a", "pair-b"} <= files
     need = int(os.environ.get("FAKE_SLOW", 8)) if "slow" in files else int(os.environ.get("FAKE_PENDING", 2))
-    cf = f"{ST}/ci/{sha}"; n = int(open(cf).read()) if os.path.exists(cf) else 0
-    if n == 0 and conflicting(sha): return None   # GitHub runs no pull_request CI on a conflicting PR
-    n += 1; open(cf, "w").write(str(n))
-    if n <= need: return "pending"
-    v = "fail" if red else "pass"
-    if n == need + 1: open(f"{ST}/ci-runs.log", "a").write(f"{sha} {v}\n")
+    cf = f"{ST}/ci/{sha}"; c = json.load(open(cf)) if os.path.exists(cf) else {"n": 0, "runs": 1}
+    if c["n"] == 0 and c["runs"] == 1 and conflicting(sha): return None   # no pull_request CI on a conflicting PR
+    c["n"] += 1; json.dump(c, open(cf, "w"))
+    if c["n"] <= need: return "pending"
+    v = "fail" if red or ("flaky" in files and c["runs"] == 1) else "pass"
+    if c["n"] == need + 1: open(f"{ST}/ci-runs.log", "a").write(f"{sha} {v}\n")
     return v
 
 def out(obj, args):
@@ -81,6 +86,15 @@ if a[0] == "api":
     sha = a[1].split("/commits/")[1].split("/")[0]; v = ci(sha)
     runs = [] if v is None else [{"name": "unit", "status": "in_progress" if v == "pending" else "completed"}]
     out({"total_count": len(runs), "check_runs": runs}, a); sys.exit(0)
+if a[:2] == ["run", "list"]:
+    sha = opt(a, "--commit"); v = ci(sha) if os.path.exists(f"{ST}/ci/{sha}") else None
+    out([] if v is None else [{"databaseId": int(sha[:7], 16), "conclusion": "failure" if v == "fail" else ("success" if v == "pass" else "")}], a); sys.exit(0)
+if a[:2] == ["run", "rerun"]:
+    for f in os.listdir(f"{ST}/ci"):
+        if int(f[:7], 16) == int(a[2]):
+            c = json.load(open(f"{ST}/ci/{f}")); c["runs"] += 1; c["n"] = 0; json.dump(c, open(f"{ST}/ci/{f}", "w"))
+            open(f"{ST}/triggers.log", "a").write(f"rerun {f}\n")
+    sys.exit(0)
 if a[0] != "pr": sys.exit("fake gh: unsupported " + " ".join(a))
 c = a[1]
 if c == "list":

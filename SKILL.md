@@ -22,10 +22,10 @@ ask the user only what is theirs to decide, and log everything. You never deploy
   | `reports/` | builder reports `<branch>.md` | yes |
   | `reviews/` | verdicts `<stem>-review<N>.md` | yes |
   | `pr/` | PR texts `<stem>.txt` | yes |
-  | `pipes/` | pipeline and merge-train output `<name>.out`; batch runner log `merge-batch.out` | yes |
+  | `pipes/` | pipeline and merge-train output `<name>.out`; runner log `merge-queue.out` | yes |
   | `logs/` | `decisions-<date>.md` (tracked); train and gate logs (untracked) | partly |
   | `plans/` | plans, batches, approved mockups | yes |
-  | `run/` | `merge.lock`, `merge-priority`, `merge-batch-max`, `batch-queue/`, `batch-result/`, pause files, `model-overrides.txt` | overrides only |
+  | `run/` | `merge.lock`, `merge-queue/`, `merge-result/`, pause files, `model-overrides.txt` | overrides only |
   | `archive/<yyyy-mm>/` | finished one-off scripts, prompts, old notes | text only |
   | `artifacts/<yyyy-mm>/` | screenshots, scratch databases, large logs | no |
 
@@ -92,59 +92,43 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 ## 4. Merge train
 
-- `merge-seq.sh` is a **batched** train. Per item it first merges current main into the lane ("Merged current main
-  into the <branch> branch."; GitHub runs no PR CI on a PR that conflicts with its base): a conflict prints
-  `<wt> TRAIN rc=3` + `CONFLICT` + files and the item is not queued. Then it pushes the branch, creates/updates the PR from `pr/<stem>.txt`
-  (so early PR CI starts at once), prints the PR URL and `<wt> queued for the merge batch (head <sha>)`, joins
-  `$ORCH_RUN/batch-queue/<stem>` and waits. One runner (`merge-batch.sh runner`, started by a waiting item; it holds
-  `$ORCH_RUN/merge.lock`, a dead owner's lock is reclaimed and its queue retried) works the queue in rounds:
-  - drops items whose PR head moved (the item prints `PR head moved: requeued at <sha>` and rejoins), evicts items
-    whose **early** PR CI failed (`MERGE FAIL CI: <jobs> failed on <url> (early PR CI on <sha>; PR left open)`), and
-    waits while early CI is pending (bounded: `ORCH_BATCH_EARLY_MAX`, default 1200 s). `merge-priority` goes first.
-  - **One item:** the classic single train — merge main into the lane, optional local gates, push, wait for
-    **every check on the exact pushed commit** (`ci-wait.sh`), `gh pr merge --match-head-commit`, delete worktree +
-    branch. Same lines as before (`<wt> gates: ...`, URL, `waiting for GitHub CI`, `merged`, main commit line).
-  - **Several (cap `$ORCH_RUN/merge-batch-max`, default 8):** a candidate in `${ORCH_WT_PREFIX}batch` = current main
-    + each branch as a merge commit ("Merged <branch> (#PR) into the batch."), pushed as `batch/<yyyymmdd-hhmm>`
-    with PR "Merge train batch: #a, #b, ..." (body lists each PR). One CI run on the exact candidate commit; green →
-    merge (merge commit) and every item PR shows MERGED; items print `GitHub CI passed on batch <url>`, `merged`,
-    the main commit line. An item PR not marked MERGED within a minute gets a `note: ... not marked MERGED` line
-    (left open; check it). Batch branches are deleted; a dead runner's open batch PRs are closed by the next runner.
-  - **Red batch → bisect:** close the candidate, split in halves and run them one after the other, each rebuilt
-    from the CURRENT main, down to single trains; the culprit prints `MERGE FAIL CI: ... (isolated in batch)`,
-    everything else merges. A failure that needs two branches together (each green alone) reappears in the second
-    half (main + first half + second half) and is isolated there; nothing merges unless its base is the current
-    main. CI timeouts are not bisected (every item gets `MERGE FAIL CI: ... (batch <url>; PR left open)`: requeue).
-  - **Waiting items stay current:** a queued PR whose early CI is pending and that lacks current main gets main
-    merged in by the runner, pushed, and requeued (`PR head moved: requeued at <sha>`); a PR GitHub reports as
-    `CONFLICTING` is evicted with the rc=3 lines (the merge is left in the worktree for the resolver).
-  - **Conflicts:** a branch that conflicts with main is evicted with `<wt> TRAIN rc=3` + `CONFLICT` + files; one that
-    only conflicts with a batch-mate waits for the next round (then main contains the mate).
-  - While `gh` fails, the runner frees `merge.lock` and exits; waiting items start a new runner after
-    `$ORCH_RUN/batch-backoff` (`ORCH_BATCH_BACKOFF`, default 120 s).
-  - Stopping a waiting merge-seq by PID removes its item from the queue (never stop the runner mid-candidate).
-  - A candidate merge that fails without conflict markers (a commit hook, a missing commit) evicts that item with
-    `MERGE FAIL: batch merge of <branch> failed` + the git output. The batch worktree `${ORCH_WT_PREFIX}batch` is a
-    plain `git worktree add` (no dependency install): if the repo has merge/commit hooks that need dependencies,
-    set them up there once.
-  - Tests: `tests/batch-test.sh` (bare origin + fake `gh`; green, conflict, conflictpr, refresh, mates, bisect, pair, gherr, early, single).
+- `merge-seq.sh` is a **FIFO** train: one branch at a time, one CI run per attempt (`merge-queue.sh`).
+  - **Enqueue:** checks the worktree (`TRAIN rc=2`, `MERGE FAIL DIRTY`), pushes the branch only if it has no open PR
+    (a push to an open PR starts CI), and appends it to `$ORCH_RUN/merge-queue/<stem>` with the next sequence number:
+    `<wt> queued at position N`. It never opens or updates the PR. Requeueing a queued stem keeps its position
+    (`already queued: keeping position N`; the newest merge-seq takes over the waiting, the older one exits).
+    `merge-queue-len.sh --list` prints the queue in order.
+  - **Turn (front item only; one runner under `$ORCH_RUN/merge.lock`, a dead owner's lock is reclaimed):** merge
+    current main into the lane ("Merged current main into the <branch> branch."; conflict → `<wt> TRAIN rc=3` +
+    `CONFLICT` + files, removed from the queue), optional local gates, push, create/update the PR from
+    `pr/<stem>.txt` — the single CI run — wait for **every check on the exact pushed commit** (`ci-wait.sh`),
+    `gh pr merge --match-head-commit`, delete worktree + branch. Lines are the classic train's (`<wt> gates: ...`,
+    URL, `waiting for GitHub CI`, `GitHub CI passed`, `merged`, main commit line).
+  - **CI red:** `MERGE FAIL CI: ...` + `<wt> moved to the end of the merge queue (position N)`; the next item goes.
+    At its next turn: new commits on the branch (pushed or committed in the worktree) → a fresh attempt; unchanged →
+    one rerun (merge main again; if the commit is identical, `gh run rerun --failed`, printed as `rerunning the
+    failed CI`); a second failure with no new commits → `MERGE FAIL CI: ... (removed after 2 attempts; requeue after
+    fixing)`. So for a red branch: fix and push; the queued item picks the fix up at its turn (no requeue needed).
+  - Stopping a waiting merge-seq by PID removes its item (never stop the runner). Runner log: `pipes/merge-queue.out`.
+  - The batch train and `merge-priority` are retired; `merge-batch.sh` is a shim, and the runner drains any
+    leftover `$ORCH_RUN/batch-queue/` items first with classic trains.
+  - Tests: `tests/queue-test.sh` (bare origin + fake `gh`; fifo, red, flake, twofail, conflict, legacy).
 - **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list
     entries: keep every side, dedupe, run the formatter and the registry test), commit
     "Merged current main into the <branch> branch.", push, requeue. Otherwise a resolver agent.
-  - `MERGE FAIL CI: ...` → fetch failing tests (`gh run view <id> --log-failed`, strip ANSI, grep ` FAIL `).
+  - `MERGE FAIL CI: ...` (item moved to the end, or removed after 2 attempts) → fetch failing tests (`gh run view <id> --log-failed`, strip ANSI, grep ` FAIL `).
     Classify: **stale test** (expectation of the old behavior the ruling changed → fixer updates fixture, never weakens
     the rule), **real regression** (builder fixes code), **flake** (log it, requeue once), **pre-existing on main**
-    (reproduce in a scratch worktree of origin/main; fix separately). Then requeue.
+    (reproduce in a scratch worktree of origin/main; fix separately). Push the fix; requeue only if it was removed.
   - `MERGE FAIL STALE` → requeue. `MERGE FAIL DIRTY` → inspect the worktree, clean, requeue.
-  - `MERGE FAIL PUSH` (push rejected at enqueue) → fetch, merge the remote branch, requeue.
+  - `MERGE FAIL PUSH` (push rejected, or the remote branch is not a fast-forward of the worktree) → fetch, merge the
+    remote branch, requeue.
   - A push rejection in the log → inspect; usually re-push after fetch/merge.
-- **Requeue** = run the same `run-pipe.sh ... merge-seq.sh ...` again (the PR is reused).
+- **Requeue** = run the same `run-pipe.sh ... merge-seq.sh ...` again (the PR is reused; a removed item goes to the end).
 - **Manual batch branches** are only needed for branches that conflict with each other in shared registry/list
-  files (the train evicts those one at a time): merge them into one branch (`templates/resolver-prompt.md` style,
+  files (each one conflicts after the other merges): merge them into one branch (`templates/resolver-prompt.md` style,
   "keep every side"), write one combined PR text, queue it. Exclude batched branches from the stalled-branch scan.
-- **Merge priority.** A batch that keeps losing the lock to small branches re-conflicts each time; write its stem
-  to `$ORCH_RUN/merge-priority` so it takes the lock next, and clear the file once it merges.
 - **Grouped runs.** For a large planned run (many lanes from one plan), split the work into groups by code area and
   run **one group at a time**: lanes inside a group may build in parallel, the group merges as one batch PR, and the
   next group starts from the new main. Put infra and capture-tooling fixes in the first group so later groups build

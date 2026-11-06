@@ -31,13 +31,13 @@ SKILL.md                      procedure the supervisor follows (lane flow, routi
 agents/                       subagent definitions (symlink into ~/.claude/agents/)
   orch-builder.md  orch-reviewer.md  orch-resolver.md
 scripts/                      merge train and lane tooling (see below)
-  orch-env.sh  run-pipe.sh  merge-seq.sh  merge-batch.sh  train.sh  merge-pr.sh  ci-wait.sh  wait-merged.sh
+  orch-env.sh  run-pipe.sh  merge-seq.sh  merge-queue.sh  train.sh  merge-pr.sh  ci-wait.sh  wait-merged.sh
   merge-queue-len.sh  launch.sh  pipeline.sh  review-chain.sh  wait-lanes.sh  lane-busy.sh
   watch-all.sh  cleanup-merged.sh
 templates/                    briefs and prompts to copy and fill
   brief-common.md  brief-port.md  review-prompt.md  delta-review-prompt.md
   resolver-prompt.md  stale-test-fixer-prompt.md  pr-text-prompt.md  project-config.example.md
-tests/                        local merge-train tests (bare origin + fake gh): tests/batch-test.sh
+tests/                        local merge-train tests (bare origin + fake gh): tests/queue-test.sh
 ```
 
 # Scripts for the orchestrating agent
@@ -48,13 +48,13 @@ Run them from anywhere inside the repo, or set `ORCH_REPO`.
 | Script | Purpose |
 |---|---|
 | `run-pipe.sh <name> <cmd...>` | Start a pipeline detached; output → `$ORCH_PIPES/<name>.out`. |
-| `merge-seq.sh <wt>:<branch>:<stem> ...` | The batched merge train: push + PR, join the batch queue, wait for the verdict. |
-| `merge-batch.sh item\|runner` | Batch queue item and the single runner (lock → candidate of main + queued branches → one CI run → merge; bisect on red; one branch = classic train). |
+| `merge-seq.sh <wt>:<branch>:<stem> ...` | The FIFO merge train: push (no PR yet), join the queue, wait for the verdict. |
+| `merge-queue.sh item\|runner` | Queue item and the single runner (lock → front item: merge main, push, PR, one CI run, merge; red → end of the queue, one rerun, then removed). `merge-batch.sh` is a retired shim. |
 | `train.sh <wt> <tag>` | Merge the default branch into the lane; optional `ORCH_LOCAL_GATES`. Exit 3 = conflict. |
 | `merge-pr.sh <wt> <branch> <stem> "<gates>"` | Push, create/update PR from `pr/<stem>.txt`, wait for CI, merge, clean up. |
 | `ci-wait.sh <PR-url> <sha>` | Wait for every check on the exact commit; `MERGE FAIL CI: ...` on failure. |
 | `wait-merged.sh <parent> [file] -- <cmd...>` | Run a command once the parent branch's PR is MERGED (stacked branches). |
-| `merge-queue-len.sh [--real]` | Count live merge-seq processes. |
+| `merge-queue-len.sh [--real\|--list]` | Count live merge-seq processes; `--list` prints the queue in order. |
 | `launch.sh <lane> <dir> <effort> "<prompt>"` | Start an external herdr lane (MODEL, KIND); prints STARTED / WAITING / LAUNCH FAIL. |
 | `pipeline.sh <branch> [deps\|-] [full\|quick]` | Chain a whole lane: wait for dependency PRs, worktree, build lane, report check, then `review-chain.sh`. |
 | `review-chain.sh <stem> <branch> [full\|quick]` | Review lane, then on PASS the PR-text lane, then `merge-seq.sh`. Prompts from `templates/`. Prints `CHAIN FAIL <stem>: <verdict head>` on FAIL; `CHAIN_NO_MERGE=1` stops after the PR text. |
