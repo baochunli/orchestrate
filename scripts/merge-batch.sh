@@ -142,7 +142,9 @@ candidate() {
     git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q "$ORCH_REMOTE" "$br"
     if git merge -q --no-ff --no-edit -m "Merged $br (#$pr) into the batch." "$head" > "$ORCH_LOGS/batch-merge-$s.log" 2>&1; then
       CAND_IN+=("$s"); continue; fi
-    files=$(git status --short | grep -E '^(UU|AA|DU|UD)'); git merge --abort 2>/dev/null; git reset -q --hard
+    files=$(git status --short | grep -E '^(UU|AA|DU|UD|AU|UA|DD)'); git merge --abort 2>/dev/null; git reset -q --hard
+    if [ -z "$files" ]; then   # failed without conflict markers (hook, missing commit): never defer, or the runner spins
+      finish "$s" "MERGE FAIL: batch merge of $br failed" "$(tail -5 "$ORCH_LOGS/batch-merge-$s.log")"; continue; fi
     if git merge-tree --write-tree "$base" "$head" >/dev/null 2>&1; then log "$s: conflicts only with batch-mates; next round"
     else finish "$s" "$(qget "$s" wt) TRAIN rc=3" "CONFLICT" "$files"; fi
   done
@@ -261,6 +263,7 @@ runner() {
   while :; do
     p=$(prio); if [ -n "$p" ] && [ ! -f "$Q/$p" ]; then log "merge-priority names $p, not in the batch queue: yielding the lock"; exit 0; fi
     round || { log "runner $$: queue empty, exiting"; exit 0; }
+    nap "$ORCH_POLL"   # never spin: a round that changed nothing must not repeat at once
   done
 }
 

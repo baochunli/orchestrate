@@ -115,7 +115,11 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   - **Conflicts:** a branch that conflicts with main is evicted with `<wt> TRAIN rc=3` + `CONFLICT` + files; one that
     only conflicts with a batch-mate waits for the next round (then main contains the mate).
   - Stopping a waiting merge-seq by PID removes its item from the queue (never stop the runner mid-candidate).
-  - Tests: `tests/batch-test.sh` (bare origin + fake `gh`; green, conflict, bisect, early, single).
+  - A candidate merge that fails without conflict markers (a commit hook, a missing commit) evicts that item with
+    `MERGE FAIL: batch merge of <branch> failed` + the git output. The batch worktree `${ORCH_WT_PREFIX}batch` is a
+    plain `git worktree add` (no dependency install): if the repo has merge/commit hooks that need dependencies,
+    set them up there once.
+  - Tests: `tests/batch-test.sh` (bare origin + fake `gh`; green, conflict, mates, bisect, early, single).
 - **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list
     entries: keep every side, dedupe, run the formatter and the registry test), commit

@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2015,SC2012  # ok/bad chains and ls counts are deliberate in this harness
 # usage: batch-test.sh [scenario...]   (default: all)  — local merge-train tests: a bare origin, a fake gh, no GitHub.
-# Scenarios: green conflict bisect early single
+# Scenarios: green conflict mates bisect early single
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); S=${ORCH_TEST_SCRIPTS:-$(cd "$HERE/../scripts" && pwd)}
 FAILS=0
@@ -73,6 +73,15 @@ t_bisect() {
   for n in a b c; do has $n "merged" && [ "$(pr_state $n)" = MERGED ] && ok "$n merged" || bad "$n not merged"; done
   git -C "$FAKE_BARE" ls-tree -r --name-only main | grep -q needs-old-api && bad "e reached main" || ok "e not in main"
 }
+t_mates() {
+  echo "== mates: two branches that conflict only with each other: the first merges, the second gets rc=3 next round"; setup
+  lane a fa; lane m1 shared=mone; lane m2 shared=mtwo
+  hold; queue a m1 m2; release_when_queued 3; finish_all; show a m1 m2
+  for n in a m1; do has $n "merged" && ok "$n merged" || bad "$n not merged"; done
+  has m2 "m2 TRAIN rc=3" && has m2 "shared.txt" && ok "m2 evicted with rc=3 after m1 merged" || bad "m2 lines missing"
+  grep -q "m2: conflicts only with batch-mates; next round" "$ORCH_STATE/pipes/merge-batch.out" && ok "m2 deferred once" || bad "no deferral logged"
+  [ "$(grep -c "conflicts only with batch-mates" "$ORCH_STATE/pipes/merge-batch.out")" = 1 ] && ok "no repeated rounds" || bad "deferral repeated"
+}
 t_early() {
   echo "== early CI: an early-red branch is evicted before batching; a slow (pending) branch is waited for"; setup
   lane a fa; lane f early-red; lane g slow
@@ -93,6 +102,6 @@ t_single() {
   tail -1 "$T/out-a" | grep -q "Merge pull request #1 from a-t1" && ok "last line is the main commit" || bad "last line: $(tail -1 "$T/out-a")"
   grep -q "Gates: full suite in PR CI" "$ORCH_STATE/pr/a.txt" && ok "[GATES] replaced" || bad "[GATES] not replaced"
 }
-[ $# -gt 0 ] || set -- green conflict bisect early single
+[ $# -gt 0 ] || set -- green conflict mates bisect early single
 for t in "$@"; do "t_$t"; done
 echo "== $FAILS failure(s)"; [ "$FAILS" = 0 ]
