@@ -6,6 +6,7 @@ CI for a commit (only commits that are, or were, a PR head) is decided by its tr
   file "early-red"                 -> job "unit" fails
   files "needs-old-api" and "new-api" -> job "unit" fails (a branch that only breaks on top of the new main)
   files "pair-a" and "pair-b"      -> job "unit" fails (two branches, each green alone, red together)
+a PR head that conflicts with main gets no checks at all (like GitHub); `pr view` reports mergeable
 $FAKE_GH/fail-view present          -> `pr view` fails (GitHub unreachable)
   file "slow"                      -> pending for $FAKE_SLOW queries (default 8), else $FAKE_PENDING (default 2)
 Every commit whose CI reached a verdict is appended once to $FAKE_GH/ci-runs.log ("<sha> pass|fail").
@@ -41,8 +42,12 @@ def refresh(p):
         save(p)
     return p
 
+def conflicting(sha):
+    main = ref("main")
+    return bool(main and sha) and git("merge-tree", "--write-tree", main, sha, check=False).returncode != 0
+
 def view(p):
-    return {"number": p["number"], "url": p["url"], "state": p["state"], "headRefOid": p.get("oid", ""),
+    return {"mergeable": "CONFLICTING" if p["state"] == "OPEN" and conflicting(p.get("oid")) else "MERGEABLE","number": p["number"], "url": p["url"], "state": p["state"], "headRefOid": p.get("oid", ""),
             "headRefName": p["head"], "title": p["title"]}
 
 def ci(sha):
@@ -51,6 +56,7 @@ def ci(sha):
     red = "early-red" in files or {"needs-old-api", "new-api"} <= files or {"pair-a", "pair-b"} <= files
     need = int(os.environ.get("FAKE_SLOW", 8)) if "slow" in files else int(os.environ.get("FAKE_PENDING", 2))
     cf = f"{ST}/ci/{sha}"; n = int(open(cf).read()) if os.path.exists(cf) else 0
+    if n == 0 and conflicting(sha): return None   # GitHub runs no pull_request CI on a conflicting PR
     n += 1; open(cf, "w").write(str(n))
     if n <= need: return "pending"
     v = "fail" if red else "pass"

@@ -32,6 +32,18 @@ prio() { cat "$P" 2>/dev/null; }
 clearprio() { [ -s "$P" ] && [ "$(cat "$P")" = "$1" ] && rm -f "$P"; }
 log() { echo "$(date '+%F %T') $*"; }
 
+# merge_main <wt> <branch>: train.sh's merge step. GitHub runs no pull_request CI on a PR that conflicts with its
+# base, so a branch must contain current main before it waits for early CI. Prints a note when it merged; on conflict
+# prints "<wt> TRAIN rc=3" + CONFLICT + files, leaves the merge for the resolver and returns 3.
+merge_main() {
+  local w=$ORCH_WT_PREFIX$1 br=$2
+  git -C "$w" fetch -q "$ORCH_REMOTE"
+  git -C "$w" merge-base --is-ancestor "$ORCH_REMOTE/$ORCH_MAIN" HEAD && return 0
+  if git -C "$w" merge --no-edit "$ORCH_REMOTE/$ORCH_MAIN" -m "Merged current $ORCH_MAIN into the $br branch." > "$ORCH_LOGS/batch-refresh-$1.log" 2>&1; then
+    echo "$1 merged current $ORCH_MAIN into the branch"; return 0; fi
+  echo "$1 TRAIN rc=3"; echo "CONFLICT"; git -C "$w" status --short | grep -E '^(UU|AA|DU|UD|AU|UA|DD)'; return 3
+}
+
 # ---------------------------------------------------------------- item
 enqueue() {
   local t=$Q/.$stem.$$
@@ -53,6 +65,7 @@ item() {
   cd "$w" 2>/dev/null || { echo "$wt TRAIN rc=2"; echo "no worktree at $w"; return; }
   [ -s "$pf" ] || { echo "MERGE FAIL: no PR text at $pf"; return; }
   [ -z "$(git status --short)" ] || { echo "MERGE FAIL DIRTY"; return; }
+  merge_main "$wt" "$br" || return
   if [ -n "${ORCH_LOCAL_GATES:-}" ]; then G="local gates (${ORCH_LOCAL_GATES}) on the lane or the batch candidate; $ORCH_GATES_TEXT"; else G=$ORCH_GATES_TEXT; fi
   python3 - "$pf" "$G" <<'PY'
 import sys; p,g=sys.argv[1],sys.argv[2]; s=open(p).read()
@@ -71,8 +84,9 @@ PY
   while :; do
     if [ -f "$R/$stem" ]; then
       kind=$(head -1 "$R/$stem")
-      if [ "$kind" = moved ]; then
-        rm -f "$R/$stem"; head=$(gh pr view "$URL" --json headRefOid -q .headRefOid)
+      if [ "$kind" = moved ]; then   # line 2, if present: the new head the runner pushed
+        head=$(sed -n 2p "$R/$stem"); rm -f "$R/$stem"
+        [ -n "$head" ] || head=$(gh pr view "$URL" --json headRefOid -q .headRefOid)
         echo "$wt PR head moved: requeued at ${head:0:9}"; enqueue
       else tail -n +2 "$R/$stem"; rm -f "$R/$stem"; return; fi
     fi
@@ -88,7 +102,19 @@ finish() {
   local s=$1 t; shift; t=$R/.$s.$$
   { echo "done"; printf '%s\n' "$@"; } > "$t" && mv "$t" "$R/$s"; rm -f "$Q/$s"; clearprio "$s"; log "$s: $*"
 }
-moved() { local t=$R/.$1.$$; echo moved > "$t" && mv "$t" "$R/$1"; rm -f "$Q/$1"; log "$1: PR head moved; item requeues"; }
+moved() { local t=$R/.$1.$$; printf 'moved\n%s\n' "${2:-}" > "$t" && mv "$t" "$R/$1"; rm -f "$Q/$1"; log "$1: PR head moved; item requeues"; }
+# refresh <stem>: merge current main into a waiting item's worktree. Conflict -> evict (rc=3 lines); merged -> push
+# and requeue at the new head. Returns 1 when nothing changed (worktree missing or dirty, or already up to date).
+refresh() {
+  local s=$1 wt br w out
+  wt=$(qget "$s" wt); br=$(qget "$s" branch); w=$ORCH_WT_PREFIX$wt
+  [ -d "$w" ] && [ -z "$(git -C "$w" status --short)" ] || return 1
+  if ! out=$(merge_main "$wt" "$br"); then finish "$s" "$out"; return 0; fi
+  [ "$(git -C "$w" rev-parse HEAD)" = "$(qget "$s" head)" ] && return 1
+  if ! out=$(git -C "$w" push -q "$ORCH_REMOTE" "$br" 2>&1); then
+    finish "$s" "MERGE FAIL PUSH: git push of $br rejected" "$(echo "$out" | grep -vE "^remote:" | tail -5)"; return 0; fi
+  log "$s: merged current $ORCH_MAIN into the branch (early CI restarts)"; moved "$s" "$(git -C "$w" rev-parse HEAD)"
+}
 order() {
   local p f; p=$(prio); [ -n "$p" ] && [ -f "$Q/$p" ] && echo "$p"
   for f in "$Q"/*; do [ -f "$f" ] || continue; [ "${f##*/}" = "$p" ] && continue; echo "$(qget "${f##*/}" t) ${f##*/}"; done | sort -n -k1,1 -k2,2 | awk '{print $2}'
@@ -224,15 +250,15 @@ attempt() {
 # round: returns 1 when the queue is empty, 2 when gh is failing (the runner exits and frees the lock; waiting
 # items start a new runner after $ORCH_RUN/batch-backoff, ORCH_BATCH_BACKOFF seconds, default 120).
 round() {
-  local max t0 s url head st oid e all ready pend now pp gherr
+  local max t0 s url head st oid mg e all ready pend now pp gherr
   max=$(cat "$D/merge-batch-max" 2>/dev/null); case "$max" in ''|*[!0-9]*|0) max=8 ;; esac
   t0=$(date +%s)
   while :; do
-    all=(); ready=(); pend=0; pp=; gherr=0; now=$(date +%s)
+    all=(); ready=(); pend=0; pp=; gherr=0; now=$(date +%s); git -C "$ORCH_REPO" fetch -q "$ORCH_REMOTE"
     for s in $(order); do
       alive "$(qget "$s" owner)" || { rm -f "$Q/$s"; log "$s: merge-seq gone; dropped"; continue; }
       url=$(qget "$s" url); head=$(qget "$s" head)
-      read -r st oid <<<"$(gh pr view "$url" --json state,headRefOid -q '.state + " " + .headRefOid' 2>/dev/null)"
+      read -r st oid mg <<<"$(gh pr view "$url" --json state,headRefOid,mergeable -q '.state + " " + .headRefOid + " " + .mergeable' 2>/dev/null)"
       case "$st" in
         OPEN) ;;
         MERGED) git -C "$ORCH_REPO" fetch -q "$ORCH_REMOTE" "$ORCH_MAIN"; finish "$s" "merged" "$(git -C "$ORCH_REPO" log --oneline -1 "$ORCH_REMOTE/$ORCH_MAIN" | cat)"; continue ;;
@@ -240,7 +266,13 @@ round() {
         *) gherr=$((gherr + 1)); continue ;;   # gh error
       esac
       [ "$oid" = "$head" ] || { moved "$s"; continue; }
+      # A conflicting PR gets no CI: merge main now (conflict -> rc=3 eviction) instead of waiting.
+      if [ "$mg" = CONFLICTING ]; then refresh "$s" && continue
+        git -C "$ORCH_REPO" merge-base --is-ancestor "$ORCH_REMOTE/$ORCH_MAIN" "$head" 2>/dev/null && { pend=$((pend + 1)); continue; }  # stale flag
+        finish "$s" "$(qget "$s" wt) TRAIN rc=3" "CONFLICT" "(GitHub reports the PR as conflicting with $ORCH_MAIN)"; continue; fi
       e=$(early "$url")
+      if [ "$e" = pending ] && ! git -C "$ORCH_REPO" merge-base --is-ancestor "$ORCH_REMOTE/$ORCH_MAIN" "$head" 2>/dev/null; then
+        refresh "$s" && continue; fi
       case "$e" in
         pass) all+=("$s"); ready+=("$s") ;;
         fail*) finish "$s" "MERGE FAIL CI: ${e#fail } failed on $url (early PR CI on ${head:0:9}; PR left open)" ;;

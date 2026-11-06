@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2015,SC2012  # ok/bad chains and ls counts are deliberate in this harness
 # usage: batch-test.sh [scenario...]   (default: all)  — local merge-train tests: a bare origin, a fake gh, no GitHub.
-# Scenarios: green conflict mates bisect pair gherr early single
+# Scenarios: green conflict conflictpr refresh mates bisect pair gherr early single
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); S=${ORCH_TEST_SCRIPTS:-$(cd "$HERE/../scripts" && pwd)}
 FAILS=0
@@ -56,22 +56,42 @@ t_green() {
   [ ! -d "${ORCH_WT_PREFIX}a" ] && ! git -C "$FAKE_BARE" rev-parse -q --verify refs/heads/a-t1 >/dev/null && ok "lane worktree and branch removed" || bad "lane a not cleaned"
 }
 t_conflict() {
-  echo "== conflict: a branch that conflicts with main is evicted with rc=3; the rest merge"; setup
+  echo "== conflict: a branch that conflicts with main at enqueue gets rc=3 and is not queued; the rest merge"; setup
   lane a fa; lane b fb; lane d shared=dee; main_commit shared=main
-  hold; queue a b d; release_when_queued 3; finish_all; show a b d
-  has d "d TRAIN rc=3" && has d "CONFLICT" && has d "shared.txt" && ok "d evicted with rc=3 + CONFLICT + shared.txt" || bad "d conflict lines missing"
-  [ "$(pr_state d)" = OPEN ] && ok "d PR left open" || bad "d PR state $(pr_state d)"
+  hold; queue a b d; release_when_queued 2; finish_all; show a b d
+  has d "d TRAIN rc=3" && has d "CONFLICT" && has d "UU shared.txt" && ok "d: rc=3 + CONFLICT + UU shared.txt" || bad "d conflict lines missing"
+  ! has d "queued for the merge batch" && [ -z "$(pr_state d)" ] && ok "d not queued, no PR opened" || bad "d was queued"
+  git -C "${ORCH_WT_PREFIX}d" status --short | grep -q "^UU shared.txt" && ok "d's merge left for the resolver" || bad "d worktree not mid-merge"
   for n in a b; do has $n "merged" && ok "$n merged" || bad "$n not merged"; done
   [ "$(batch_prs | grep -c '^MERGED')" = 1 ] && ok "a+b in one batch" || bad "batch PRs: $(batch_prs)"
 }
+t_conflictpr() {
+  echo "== conflictpr: main conflicts with a queued PR (GitHub gives it no CI): evicted with rc=3, no waiting"; setup
+  lane x shared=ex; lane y fy
+  hold; queue x y; release_when_queued 2 0; main_commit shared=main; kill "$HOLD"; wait "$HOLD" 2>/dev/null
+  finish_all; show x y
+  has x "x TRAIN rc=3" && has x "CONFLICT" && has x "UU shared.txt" && ok "x: rc=3 + CONFLICT + UU shared.txt" || bad "x conflict lines missing"
+  [ ! -e "$FAKE_GH/ci/$(git -C "${ORCH_WT_PREFIX}x" rev-parse HEAD)" ] && ok "x's conflicting head never got checks" || bad "x got checks"
+  has y "merged" && ok "y merged" || bad "y not merged"
+}
+t_refresh() {
+  echo "== refresh: main moves while items wait: they merge main, early CI reruns; one now fails early"; setup
+  lane a fa; lane e needs-old-api
+  hold; queue a e; release_when_queued 2 0; main_commit new-api; kill "$HOLD"; wait "$HOLD" 2>/dev/null
+  finish_all; show a e
+  grep -q "a: merged current main into the branch (early CI restarts)" "$ORCH_STATE/pipes/merge-batch.out" && ok "a refreshed by the runner" || bad "no refresh logged"
+  has a "PR head moved: requeued at" && has a "merged" && ok "a requeued at its new head and merged" || bad "a lines missing"
+  has e "MERGE FAIL CI: unit failed on" && has e "early PR CI" && ok "e (breaks on the new main) evicted on early CI" || bad "e lines missing"
+  git -C "$FAKE_BARE" ls-tree -r --name-only main | grep -q needs-old-api && bad "e reached main" || ok "e not in main"
+}
 t_bisect() {
-  echo "== bisect: red batch [a b c e] isolates e (breaks only on the new main); a b c merge"; setup
-  lane a fa; lane b fb; lane c fc; lane e needs-old-api; main_commit new-api
+  echo "== bisect: red batch [a b c e] (c+e red together) isolates e; a b c merge"; setup
+  lane a fa; lane b fb; lane c pair-a; lane e pair-b
   hold; queue a b c e; release_when_queued 4; finish_all; show a b c e
   has e "MERGE FAIL CI: unit failed on" && has e "(isolated in batch)" && ok "e: MERGE FAIL CI ... (isolated in batch)" || bad "e isolation line missing"
   [ "$(pr_state e)" = OPEN ] && ok "e PR left open" || bad "e PR $(pr_state e)"
   for n in a b c; do has $n "merged" && [ "$(pr_state $n)" = MERGED ] && ok "$n merged" || bad "$n not merged"; done
-  git -C "$FAKE_BARE" ls-tree -r --name-only main | grep -q needs-old-api && bad "e reached main" || ok "e not in main"
+  git -C "$FAKE_BARE" ls-tree -r --name-only main | grep -q pair-b && bad "e reached main" || ok "e not in main"
 }
 t_mates() {
   echo "== mates: two branches that conflict only with each other: the first merges, the second gets rc=3 next round"; setup
@@ -125,6 +145,6 @@ t_single() {
   tail -1 "$T/out-a" | grep -q "Merge pull request #1 from a-t1" && ok "last line is the main commit" || bad "last line: $(tail -1 "$T/out-a")"
   grep -q "Gates: full suite in PR CI" "$ORCH_STATE/pr/a.txt" && ok "[GATES] replaced" || bad "[GATES] not replaced"
 }
-[ $# -gt 0 ] || set -- green conflict mates bisect pair gherr early single
+[ $# -gt 0 ] || set -- green conflict conflictpr refresh mates bisect pair gherr early single
 for t in "$@"; do "t_$t"; done
 echo "== $FAILS failure(s)"; [ "$FAILS" = 0 ]
