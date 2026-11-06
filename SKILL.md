@@ -22,10 +22,10 @@ ask the user only what is theirs to decide, and log everything. You never deploy
   | `reports/` | builder reports `<branch>.md` | yes |
   | `reviews/` | verdicts `<stem>-review<N>.md` | yes |
   | `pr/` | PR texts `<stem>.txt` | yes |
-  | `pipes/` | pipeline and merge-train output `<name>.out` | yes |
+  | `pipes/` | pipeline and merge-train output `<name>.out`; batch runner log `merge-batch.out` | yes |
   | `logs/` | `decisions-<date>.md` (tracked); train and gate logs (untracked) | partly |
   | `plans/` | plans, batches, approved mockups | yes |
-  | `run/` | `merge.lock`, `merge-priority`, pause files, `model-overrides.txt` | overrides only |
+  | `run/` | `merge.lock`, `merge-priority`, `merge-batch-max`, `batch-queue/`, `batch-result/`, pause files, `model-overrides.txt` | overrides only |
   | `archive/<yyyy-mm>/` | finished one-off scripts, prompts, old notes | text only |
   | `artifacts/<yyyy-mm>/` | screenshots, scratch databases, large logs | no |
 
@@ -92,10 +92,30 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 ## 4. Merge train
 
-- `merge-seq.sh` serializes merges with `$ORCH_RUN/merge.lock`: merge main into the lane → optional local gates →
-  push → PR create/update → wait for **every check on the exact pushed commit** → `gh pr merge --match-head-commit`
-  → delete worktree + branch. Optional two-deep speculation (`$ORCH_RUN/merge-spec` = `on`); leave off when gates
-  are CI-only.
+- `merge-seq.sh` is a **batched** train. Per item it pushes the branch, creates/updates the PR from `pr/<stem>.txt`
+  (so early PR CI starts at once), prints the PR URL and `<wt> queued for the merge batch (head <sha>)`, joins
+  `$ORCH_RUN/batch-queue/<stem>` and waits. One runner (`merge-batch.sh runner`, started by a waiting item; it holds
+  `$ORCH_RUN/merge.lock`, a dead owner's lock is reclaimed and its queue retried) works the queue in rounds:
+  - drops items whose PR head moved (the item prints `PR head moved: requeued at <sha>` and rejoins), evicts items
+    whose **early** PR CI failed (`MERGE FAIL CI: <jobs> failed on <url> (early PR CI on <sha>; PR left open)`), and
+    waits while early CI is pending (bounded: `ORCH_BATCH_EARLY_MAX`, default 1200 s). `merge-priority` goes first.
+  - **One item:** the classic single train — merge main into the lane, optional local gates, push, wait for
+    **every check on the exact pushed commit** (`ci-wait.sh`), `gh pr merge --match-head-commit`, delete worktree +
+    branch. Same lines as before (`<wt> gates: ...`, URL, `waiting for GitHub CI`, `merged`, main commit line).
+  - **Several (cap `$ORCH_RUN/merge-batch-max`, default 8):** a candidate in `${ORCH_WT_PREFIX}batch` = current main
+    + each branch as a merge commit ("Merged <branch> (#PR) into the batch."), pushed as `batch/<yyyymmdd-hhmm>`
+    with PR "Merge train batch: #a, #b, ..." (body lists each PR). One CI run on the exact candidate commit; green →
+    merge (merge commit) and every item PR shows MERGED; items print `GitHub CI passed on batch <url>`, `merged`,
+    the main commit line. An item PR not marked MERGED within a minute gets a `note: ... not marked MERGED` line
+    (left open; check it). Batch branches are deleted; a dead runner's open batch PRs are closed by the next runner.
+  - **Red batch → bisect:** close the candidate, split in halves, each half a fresh candidate from the new main, down
+    to single trains; the culprit prints `MERGE FAIL CI: ... (isolated in batch)`, everything else merges.
+    Limits: a failure that needs two branches together (each green alone) passes both halves and lands on main;
+    CI timeouts are not bisected (every item gets `MERGE FAIL CI: ... (batch <url>; PR left open)`: requeue).
+  - **Conflicts:** a branch that conflicts with main is evicted with `<wt> TRAIN rc=3` + `CONFLICT` + files; one that
+    only conflicts with a batch-mate waits for the next round (then main contains the mate).
+  - Stopping a waiting merge-seq by PID removes its item from the queue (never stop the runner mid-candidate).
+  - Tests: `tests/batch-test.sh` (bare origin + fake `gh`; green, conflict, bisect, early, single).
 - **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list
     entries: keep every side, dedupe, run the formatter and the registry test), commit
@@ -105,13 +125,12 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     the rule), **real regression** (builder fixes code), **flake** (log it, requeue once), **pre-existing on main**
     (reproduce in a scratch worktree of origin/main; fix separately). Then requeue.
   - `MERGE FAIL STALE` → requeue. `MERGE FAIL DIRTY` → inspect the worktree, clean, requeue.
+  - `MERGE FAIL PUSH` (push rejected at enqueue) → fetch, merge the remote branch, requeue.
   - A push rejection in the log → inspect; usually re-push after fetch/merge.
 - **Requeue** = run the same `run-pipe.sh ... merge-seq.sh ...` again (the PR is reused).
-- **Batching.** When many reviewed **no-behavior-change** branches wait (serial CI ≈ N × CI time, plus repeated
-  conflicts in shared registry/list files): stop their waiting merge-seq processes **by PID** (never pkill; leave the
-  lock holder alone), merge them into 1–3 batch branches (`templates/resolver-prompt.md` style, "keep every side"),
-  stack batch B on batch A, write one combined PR text per batch, queue A, then B after A's PR merges. Exclude
-  batched branches from the stalled-branch scan. Behavior-changing branches stay individual.
+- **Manual batch branches** are only needed for branches that conflict with each other in shared registry/list
+  files (the train evicts those one at a time): merge them into one branch (`templates/resolver-prompt.md` style,
+  "keep every side"), write one combined PR text, queue it. Exclude batched branches from the stalled-branch scan.
 - **Merge priority.** A batch that keeps losing the lock to small branches re-conflicts each time; write its stem
   to `$ORCH_RUN/merge-priority` so it takes the lock next, and clear the file once it merges.
 - **Grouped runs.** For a large planned run (many lanes from one plan), split the work into groups by code area and
