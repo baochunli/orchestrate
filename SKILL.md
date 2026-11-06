@@ -44,6 +44,14 @@ ask the user only what is theirs to decide, and log everything. You never deploy
 plan → worktree → builder → report → review (verdict) → [fix → delta review]* → PR text → merge train → merged
 ```
 
+- **Granularity: coarse bundles, not a PR per request.** Each branch, review, PR text and CI run has a fixed cost,
+  and the merge queue is serial, so tiny PRs pile up behind each other. Keep one open **bundle branch per area**
+  (e.g. live-test fixes, dashboard/UI tweaks, email changes) and add each new small request to the matching bundle
+  while it is still building (append to its brief, prompt the lane). Small fixes (CI fixes, docs or test tweaks,
+  follow-ups) ride along in a related branch, never their own PR. One review per bundle (delta re-review after
+  fixes), one CI run per bundle. Start a separate branch only for large or risky work (migrations, auth,
+  confidentiality, data rewrites), work that blocks others, or when the area's bundle is already in review or the
+  merge queue. Aim for a handful of PRs per day, not dozens.
 - **Naming.** branch `area-tN` (kebab); stem = branch with `-` removed (`area-t3` → `areat3`);
   worktree `$ORCH_WT_PREFIX<stem>` (default `<repo>-<stem>`).
 - **Files:**
@@ -205,6 +213,8 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 
 ## 10. Lessons (failures seen in practice, and the fix)
 
+- **Fourteen PRs in one afternoon backed the queue up for hours** — one branch per small request meant fourteen reviews,
+  PR texts and serial CI runs on one runner. Bundle small requests per area (§1 Granularity).
 - **Waiters keyed on parent refs looped forever** — GitHub deletes merged branches. Key every waiter on PR merged
   state (`wait-merged.sh`).
 - **A train conflict sat unnoticed for over an hour** — an event watcher reported it but nothing acted. The 15-minute
