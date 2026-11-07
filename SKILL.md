@@ -123,10 +123,23 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     one rerun (merge main again; if the commit is identical, `gh run rerun --failed`, printed as `rerunning the
     failed CI`); a second failure with no new commits → `MERGE FAIL CI: ... (removed after 2 attempts; requeue after
     fixing)`. So for a red branch: fix and push; the queued item picks the fix up at its turn (no requeue needed).
+  - **Label-gated CI (`ORCH_TURN_LABEL`, e.g. `merge-turn`; unset = off).** For a repo whose workflow runs the full PR
+    suite only while the PR carries that label (other pushes to an open PR run only cheap jobs, so fix pushes never
+    hold a CI runner outside their turn). At the turn, `merge-pr.sh` records the commit's existing workflow runs,
+    pushes, opens/updates the PR, removes the label if a crashed turn left it (`removed a leftover <label> label`) and
+    adds it (`added the <label> label ...`): the `labeled` event starts exactly one full run on the current head, also
+    when the push was a no-op. `ci-wait.sh` then ignores the cheap runs' skipped checks and cancelled runs and passes
+    only when a run started at this turn succeeded with the job `ORCH_REQUIRED_CHECK` (a job that runs only in full
+    runs and only succeeds when they do); any failed run fails. The label is removed when the turn ends (merged, red,
+    or any failure). An identical-commit second attempt gets a fresh full run via the label instead of
+    `gh run rerun --failed` (`rerunning the full CI ... via the <label> label`). To start a full run by hand, add the
+    label to the PR; remove it afterwards. Enable the setting before (or together with) the workflow change: with the
+    gated workflow on main and the setting unset, the classic wait passes on skipped checks.
   - Stopping a waiting merge-seq by PID removes its item (never stop the runner). Runner log: `pipes/merge-queue.out`.
   - The batch train and `merge-priority` are retired; `merge-batch.sh` is a shim, and the runner drains any
     leftover `$ORCH_RUN/batch-queue/` items first with classic trains.
-  - Tests: `tests/queue-test.sh` (bare origin + fake `gh`; fifo, red, flake, twofail, conflict, legacy).
+  - Tests: `tests/queue-test.sh` (bare origin + fake `gh`; fifo, red, flake, twofail, conflict, legacy; label-gated:
+    label, race, leftover, noop, prelabel).
 - **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list
     entries: keep every side, dedupe, run the formatter and the registry test), commit

@@ -12,6 +12,15 @@ $FAKE_GH/fail-view present          -> `pr view` fails (GitHub unreachable)
   file "slow"                      -> pending for $FAKE_SLOW queries (default 8), else $FAKE_PENDING (default 2)
 Every CI start (a new head on an open PR, or a rerun) is appended to $FAKE_GH/triggers.log.
 Every commit whose CI reached a verdict is appended once to $FAKE_GH/ci-runs.log ("<sha> pass|fail").
+
+$FAKE_TURN_LABEL set (e.g. merge-turn) -> a label-gated workflow, modelled as workflow runs ($FAKE_GH/runs.json):
+  a new head on an open PR starts a "sync" run; adding the label starts a "labeled" run on the current head.
+  A run is full (heavy) only while the PR carries the label; otherwise it is cheap: it completes at once with
+  conclusion success and the jobs "unit" and "publish" skipped (only "audit" runs). A full run is pending for
+  $FAKE_PENDING polls, then completes like the classic CI above ("unit" fails on a red tree, "publish" then skipped).
+  A labeled run stays invisible for its first $FAKE_LABEL_DELAY run listings (GitHub starting it late).
+  Every full run start is appended to $FAKE_GH/full-runs.log ("<sha> <kind>"); every run to $FAKE_GH/runs.log.
+  $FAKE_UNGATED also set -> the workflow before the gate: every sync run is full and labels start no run.
 """
 import fcntl, json, os, subprocess, sys
 
@@ -42,6 +51,7 @@ def refresh(p):
             p["oid"] = h; p.setdefault("heads", [])
             if h not in p["heads"]:
                 p["heads"].append(h); open(f"{ST}/triggers.log", "a").write(f"#{p['number']} {p['head']} {h}\n")
+                if GATED: start_run(p, h, "sync")
         main = ref("main")
         if p.get("oid") and main and is_anc(p["oid"], main): p["state"] = "MERGED"
         save(p)
@@ -53,7 +63,37 @@ def conflicting(sha):
 
 def view(p):
     return {"mergeable": "CONFLICTING" if p["state"] == "OPEN" and conflicting(p.get("oid")) else "MERGEABLE","number": p["number"], "url": p["url"], "state": p["state"], "headRefOid": p.get("oid", ""),
-            "headRefName": p["head"], "title": p["title"]}
+            "headRefName": p["head"], "title": p["title"], "labels": [{"name": n} for n in p.get("labels", [])]}
+
+GATED = os.environ.get("FAKE_TURN_LABEL", ""); UNGATED = bool(os.environ.get("FAKE_UNGATED"))
+def runs(): return json.load(open(f"{ST}/runs.json")) if os.path.exists(f"{ST}/runs.json") else []
+def save_runs(rs): json.dump(rs, open(f"{ST}/runs.json", "w"))
+def start_run(p, sha, kind):
+    rs = runs(); heavy = UNGATED or GATED in p.get("labels", [])
+    delay = int(os.environ.get("FAKE_LABEL_DELAY", 0)) if kind == "labeled" else 0
+    rs.append({"id": 1000 + len(rs), "sha": sha, "pr": p["number"], "kind": kind, "heavy": heavy, "n": 0, "hide": delay})
+    save_runs(rs); open(f"{ST}/runs.log", "a").write(f"{sha} {kind} {'full' if heavy else 'cheap'}\n")
+    if heavy: open(f"{ST}/full-runs.log", "a").write(f"{sha} {kind}\n")
+def red(sha):
+    files = set(git("ls-tree", "-r", "--name-only", sha).stdout.split())
+    return "early-red" in files or {"needs-old-api", "new-api"} <= files or {"pair-a", "pair-b"} <= files
+def run_state(r):
+    """(status, conclusion, {job: conclusion}) of a run; advances a full run by one poll."""
+    if not r["heavy"]: return "completed", "success", {"audit": "success", "unit": "skipped", "publish": "skipped"}
+    r["n"] += 1; need = int(os.environ.get("FAKE_PENDING", 2))
+    if r["n"] <= need: return "in_progress", None, {"audit": None, "unit": None, "publish": None}
+    v = "fail" if red(r["sha"]) else "pass"
+    if r["n"] == need + 1: open(f"{ST}/ci-runs.log", "a").write(f"{r['sha']} {v}\n")
+    if v == "fail": return "completed", "failure", {"audit": "success", "unit": "failure", "publish": "skipped"}
+    return "completed", "success", {"audit": "success", "unit": "success", "publish": "success"}
+def visible(sha):
+    """Runs on sha that GitHub shows now, with their states (one poll each)."""
+    rs = runs(); outl = []
+    for r in rs:
+        if r["sha"] != sha: continue
+        if r["hide"] > 0: r["hide"] -= 1; continue
+        outl.append((r, *run_state(r)))
+    save_runs(rs); return outl
 
 def ci(sha):
     if not any(sha in p.get("heads", []) for p in allprs()): return None
@@ -82,6 +122,18 @@ def opt(args, k, d=None): return args[args.index(k) + 1] if k in args else d
 a = sys.argv[1:]
 open(f"{ST}/calls.log", "a").write(" ".join(a) + "\n")
 if a[:2] == ["repo", "view"]: out({"nameWithOwner": "o/r"}, a); sys.exit(0)
+if a[0] == "api" and GATED and "/actions/runs?" in a[1]:
+    from urllib.parse import parse_qs
+    sha = parse_qs(a[1].split("?", 1)[1])["head_sha"][0]
+    out({"workflow_runs": [{"id": r["id"], "head_sha": sha, "status": st, "conclusion": co} for r, st, co, _ in visible(sha)]}, a); sys.exit(0)
+if a[0] == "api" and GATED and a[1].endswith("/jobs") or (a[0] == "api" and GATED and "/jobs?" in a[1]):
+    rid = int(a[1].split("/actions/runs/")[1].split("/")[0]); r = next(x for x in runs() if x["id"] == rid)
+    _, _, jobs = run_state(dict(r, n=10**6)) if r["heavy"] else run_state(r)   # read-only: the verdict, no poll
+    out({"jobs": [{"name": k, "conclusion": v} for k, v in jobs.items()]}, a); sys.exit(0)
+if a[0] == "api" and GATED:   # check runs: every job of every visible run (the classic ci-wait reads these)
+    sha = a[1].split("/commits/")[1].split("/")[0]
+    crs = [{"name": k, "status": st if v is None or st != "completed" else "completed", "conclusion": v} for _, st, _, jobs in visible(sha) for k, v in jobs.items()]
+    out({"total_count": len(crs), "check_runs": crs}, a); sys.exit(0)
 if a[0] == "api":
     sha = a[1].split("/commits/")[1].split("/")[0]; v = ci(sha)
     runs = [] if v is None else [{"name": "unit", "status": "in_progress" if v == "pending" else "completed"}]
@@ -109,12 +161,25 @@ elif c == "create":
          "body": open(opt(a, "--body-file")).read(), "state": "OPEN"}
     save(p); refresh(p); print(p["url"])
 elif c == "edit":
-    p = load(num(a[2])); p["title"] = opt(a, "--title", p["title"]); save(p)
+    p = load(num(a[2])); p["title"] = opt(a, "--title", p["title"]); labels = p.setdefault("labels", [])
+    rm = opt(a, "--remove-label"); add = opt(a, "--add-label")
+    if rm in labels: labels.remove(rm)
+    save(p)
+    if add and add not in labels:
+        labels.append(add); save(p); open(f"{ST}/labels.log", "a").write(f"#{p['number']} labeled {add}\n")
+        if GATED and not UNGATED and add == GATED and p["state"] == "OPEN": start_run(refresh(p), p["oid"], "labeled")
+    if rm: open(f"{ST}/labels.log", "a").write(f"#{p['number']} unlabeled {rm}\n")
 elif c == "view":
     if os.path.exists(f"{ST}/fail-view"): sys.exit("fake gh: HTTP 502")
     out(view(refresh(load(num(a[2])))), a)
 elif c == "checks":
-    p = refresh(load(num(a[2]))); v = ci(p["oid"])
+    p = refresh(load(num(a[2])))
+    if GATED:   # latest run's conclusion per job name, like gh pr checks
+        b = {}
+        for _, st, _, jobs in visible(p["oid"]):
+            for k, v in jobs.items(): b[k] = "pending" if v is None else {"success": "pass", "skipped": "skipping"}.get(v, "fail")
+        out([{"name": k, "bucket": v} for k, v in b.items()], a); sys.exit(0)
+    v = ci(p["oid"])
     out([] if v is None else [{"name": "unit", "bucket": v}, {"name": "lint", "bucket": "pass" if v != "pending" else "pending"}], a)
 elif c == "merge":
     p = refresh(load(num(a[2]))); h = opt(a, "--match-head-commit")

@@ -14,6 +14,8 @@
 #         At its next turn: head changed (a fix was pushed or committed) -> a fresh attempt; unchanged -> one rerun
 #         (merge main again; same commit -> `gh run rerun --failed`), and a second failure removes it:
 #         "MERGE FAIL CI: ... (removed after 2 attempts; requeue after fixing)". Runner log: $ORCH_PIPES/merge-queue.out.
+#         ORCH_TURN_LABEL set (label-gated CI): merge-pr.sh adds the label at the turn (that starts the one full run)
+#         and removes it when the turn ends; an identical-commit second attempt gets a fresh full run instead of a rerun.
 # Legacy: items left in $ORCH_RUN/batch-queue/ by the retired batch train are drained first, one classic train each.
 . "$(dirname "$0")/orch-env.sh"
 D=$ORCH_RUN; L=$D/merge.lock; Q=$D/merge-queue; R=$D/merge-result; BIN=$ORCH_SKILL_DIR
@@ -116,9 +118,11 @@ turn() {
   else final "$s" "$wt GATES FAIL" "$(tail -20 "$out")"; return; fi
   post=$(git -C "$w" rev-parse HEAD)
   if [ "$fails" -gt 0 ] && [ "$post" = "$failhead" ]; then   # identical commit: rerun its failed runs
-    if (cd "$w" && rerun_failed "$post"); then rr=1; else log "$s: no failed run to rerun on ${post:0:9}"; fi
+    if [ -n "${ORCH_TURN_LABEL:-}" ]; then rr=label   # re-adding the label starts a fresh full run
+    elif (cd "$w" && rerun_failed "$post"); then rr=1; else log "$s: no failed run to rerun on ${post:0:9}"; fi
   fi
-  [ -n "$rr" ] && emit "$s" note "$wt rerunning the failed CI on ${post:0:9} (attempt 2)"
+  [ "$rr" = 1 ] && emit "$s" note "$wt rerunning the failed CI on ${post:0:9} (attempt 2)"
+  [ "$rr" = label ] && emit "$s" note "$wt rerunning the full CI on ${post:0:9} via the $ORCH_TURN_LABEL label (attempt 2)"
   "$BIN/merge-pr.sh" "$wt" "$br" "$s" "$G" 2>&1 | grep -vE "^remote:" > "$res"
   if grep -qx "merged" "$res"; then final "$s" "$wt gates: $G" "$(cat "$res")"; return; fi
   if grep -q "^MERGE FAIL CI: " "$res"; then

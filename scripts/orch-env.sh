@@ -6,6 +6,11 @@
 #   ORCH_REMOTE     git remote (default: origin);  ORCH_MAIN  default branch (default: main)
 #   ORCH_LOCAL_GATES  optional shell command run in the worktree after merging main (empty = gates delegated to PR CI)
 #   ORCH_CI_GATE    "on" (default) = wait for every check on the exact pushed commit before merging; "off" = merge without waiting
+#   ORCH_TURN_LABEL label-gated CI (unset = off): a PR label (e.g. merge-turn) that the repo's workflow requires before
+#                   it runs the full suite on a pull request. merge-pr.sh adds it at the merge-queue turn (the "labeled"
+#                   event starts the one full run) and removes it when the turn ends; ci-wait.sh then never passes on
+#                   skipped checks. Enable it before or together with the workflow change, never after.
+#   ORCH_REQUIRED_CHECK  with ORCH_TURN_LABEL: the job name that proves a full run passed (e.g. "Publish successful PR tree")
 #   ORCH_GATES_TEXT text substituted for [GATES] in PR bodies when gates are delegated to PR CI
 #   ORCH_POLL       lock poll interval in seconds (default 30)
 #   ORCH_QUEUE_MAX  launch.sh holds build lanes while the merge queue has >= this many branches (default 99 = off)

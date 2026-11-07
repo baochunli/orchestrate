@@ -52,7 +52,7 @@ Run them from anywhere inside the repo, or set `ORCH_REPO`.
 | `merge-queue.sh item\|runner` | Queue item and the single runner (lock → front item: merge main, push, PR, one CI run, merge; red → end of the queue, one rerun, then removed). `merge-batch.sh` is a retired shim. |
 | `train.sh <wt> <tag>` | Merge the default branch into the lane; optional `ORCH_LOCAL_GATES`. Exit 3 = conflict. |
 | `merge-pr.sh <wt> <branch> <stem> "<gates>"` | Push, create/update PR from `pr/<stem>.txt`, wait for CI, merge, clean up. |
-| `ci-wait.sh <PR-url> <sha>` | Wait for every check on the exact commit; `MERGE FAIL CI: ...` on failure. |
+| `ci-wait.sh <PR-url> <sha>` | Wait for every check on the exact commit; `MERGE FAIL CI: ...` on failure. With `ORCH_TURN_LABEL` (label-gated CI), wait for a run started at the turn whose `ORCH_REQUIRED_CHECK` job succeeded; skipped checks never pass. |
 | `wait-merged.sh <parent> [file] -- <cmd...>` | Run a command once the parent branch's PR is MERGED (stacked branches). |
 | `merge-queue-len.sh [--real\|--list]` | Count live merge-seq processes; `--list` prints the queue in order. |
 | `launch.sh <lane> <dir> <effort> "<prompt>"` | Start an external herdr lane (MODEL, KIND); prints STARTED / WAITING / LAUNCH FAIL. |

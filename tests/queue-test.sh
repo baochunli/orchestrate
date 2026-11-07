@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2015,SC2012  # ok/bad chains and ls counts are deliberate in this harness
 # usage: queue-test.sh [scenario...]   (default: all) — local FIFO merge-train tests: a bare origin, a fake gh, no GitHub.
-# Scenarios: fifo red flake twofail conflict legacy
+# Scenarios: fifo red flake twofail conflict legacy (ORCH_TURN_LABEL unset), label race leftover noop (label-gated CI), prelabel (setting on, workflow not yet gated)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); S=${ORCH_TEST_SCRIPTS:-$(cd "$HERE/../scripts" && pwd)}
 FAILS=0
@@ -14,7 +14,7 @@ setup() {
   printf '#!/bin/sh\necho %s\n' "'{\"result\":{\"agents\":[]}}'" > "$T/bin/herdr"; chmod +x "$T/bin/gh" "$T/bin/herdr"
   export PATH="$T/bin:$PATH" FAKE_GH=$T/gh FAKE_BARE=$T/origin.git
   export ORCH_REPO=$T/app ORCH_STATE=$T/state ORCH_WT_PREFIX=$T/app- ORCH_POLL=1 ORCH_CI_SLEEP=1 ORCH_CI_GATE=on
-  unset ORCH_LOCAL_GATES ORCH_POST_MERGE ORCH_RUN ORCH_PR ORCH_LOGS ORCH_PIPES ORCH_BRIEFS ORCH_REPORTS ORCH_REVIEWS ORCH_PLANS ORCH_ARTIFACTS ORCH_SKILL_DIR
+  unset FAKE_TURN_LABEL FAKE_LABEL_DELAY FAKE_UNGATED ORCH_TURN_LABEL ORCH_REQUIRED_CHECK ORCH_CI_RUNS_BEFORE ORCH_LOCAL_GATES ORCH_POST_MERGE ORCH_RUN ORCH_PR ORCH_LOGS ORCH_PIPES ORCH_BRIEFS ORCH_REPORTS ORCH_REVIEWS ORCH_PLANS ORCH_ARTIFACTS ORCH_SKILL_DIR
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@x GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@x
   git init -q --bare -b main "$FAKE_BARE"; git clone -q "$FAKE_BARE" "$ORCH_REPO" 2>/dev/null
   printf 'one\ntwo\nthree\n' > "$ORCH_REPO/shared.txt"; git -C "$ORCH_REPO" add -A; git -C "$ORCH_REPO" commit -qm init
@@ -107,6 +107,66 @@ t_legacy() {
   kill "$OWN"; wait "$OWN" 2>/dev/null
   head -1 "$ORCH_STATE/run/batch-result/l" | grep -qx "done" && grep -qx merged "$ORCH_STATE/run/batch-result/l" && ok "batch-result/l: done + merged" || bad "legacy result: $(cat "$ORCH_STATE/run/batch-result/l" 2>/dev/null)"
 }
-[ $# -gt 0 ] || set -- fifo red flake twofail conflict legacy
+# ---- label-gated CI (the workflow runs its full suite on a PR only while it carries the merge-turn label)
+gated() { export FAKE_TURN_LABEL=merge-turn ORCH_TURN_LABEL=merge-turn ORCH_REQUIRED_CHECK=publish; }
+full_runs() { local h; for h in $(heads "$1"); do grep -c "^$h $2" "$FAKE_GH/full-runs.log" 2>/dev/null; done | awk '{s+=$1} END {print s+0}'; }
+cheap_runs() { local h; for h in $(heads "$1"); do grep -c "^$h .* cheap$" "$FAKE_GH/runs.log" 2>/dev/null; done | awk '{s+=$1} END {print s+0}'; }
+heads() { python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1])).get("heads", [])))' "$FAKE_GH/prs/$(pr_num "$1").json"; }
+labels() { gh pr view "$(pr_num "$1")" --json labels -q '.labels[].name' | paste -sd, -; }
+# open_pr <name> [label]: push the lane and open its PR outside the train (a crashed or interrupted earlier turn).
+open_pr() { git -C "${ORCH_WT_PREFIX}$1" push -q -u origin "$1-t1"
+  gh pr create --base main --head "$1-t1" --title "Added $1" --body-file "$ORCH_STATE/pr/$1.txt" >/dev/null
+  [ -z "${2:-}" ] || gh pr edit "$(pr_num "$1")" --add-label "$2"; }
+t_label() {
+  echo "== label: the full CI runs once per turn via the label; a fix pushed off-turn runs only the cheap jobs"; setup; gated
+  lane r early-red; lane b fb
+  hold; queue r b; release
+  wait_line r "moved to the end of the merge queue" && ok "red r moved to the end" || bad "r not moved"
+  has r "MERGE FAIL CI: unit failed on" && ok "r: MERGE FAIL CI names the failed job" || bad "no MERGE FAIL CI line"
+  [ -z "$(labels r)" ] && ok "label removed when r's turn ended red" || bad "r still labeled: $(labels r)"
+  git -C "${ORCH_WT_PREFIX}r" rm -q early-red; git -C "${ORCH_WT_PREFIX}r" commit -qm "Fixed r."
+  git -C "${ORCH_WT_PREFIX}r" push -q origin r-t1   # the off-turn fix push
+  finish_all; show r b
+  [ "$(merged_order)" = "b r" ] && ok "merged b, then the fixed r" || bad "merge order: $(merged_order)"
+  [ "$(full_runs b labeled)" = 1 ] && [ "$(full_runs b sync)" = 0 ] && ok "b: exactly one full run, started by the label" || bad "b full runs: labeled $(full_runs b labeled) sync $(full_runs b sync)"
+  [ "$(full_runs r labeled)" = 2 ] && [ "$(full_runs r sync)" = 0 ] && ok "r: two full runs (red turn, fix turn), none from the off-turn push" || bad "r full runs: labeled $(full_runs r labeled) sync $(full_runs r sync)"
+  [ "$(cheap_runs r)" = 2 ] && ok "r: the opening and the off-turn push ran only cheap jobs" || bad "r cheap runs $(cheap_runs r)"
+  [ -z "$(labels b)" ] && [ -z "$(labels r)" ] && ok "no label left on merged PRs" || bad "labels left: b=$(labels b) r=$(labels r)"
+  has b "added the merge-turn label" && ok "turn line: added the merge-turn label" || bad "no label line"
+}
+t_race() {
+  echo "== race: the cheap run's skipped checks complete first; ci-wait waits for the late labeled run"; setup; gated
+  export FAKE_LABEL_DELAY=4
+  lane r early-red; lane g fg
+  hold; queue r g; release; finish_all; show r g
+  ! has r "GitHub CI passed" && has r "MERGE FAIL CI: unit failed on" && ok "red r not passed on skipped checks; failed on the full run" || bad "r passed on skipped checks"
+  [ "$(merged_order)" = "g" ] && ok "only g merged" || bad "merge order: $(merged_order)"
+  has g "GitHub CI passed" && [ "$(full_runs g labeled)" = 1 ] && ok "g passed on its one full run" || bad "g: full runs $(full_runs g labeled)"
+}
+t_leftover() {
+  echo "== leftover: a label left by a crashed turn is removed and re-added, so labeled fires again"; setup; gated
+  lane l fl; open_pr l merge-turn
+  [ "$(full_runs l labeled)" = 1 ] && ok "the crashed turn's labeled run exists" || bad "setup: full runs $(full_runs l labeled)"
+  queue l; finish_all; show l
+  has l "removed a leftover merge-turn label" && has l "merged" && ok "leftover removed, re-added, merged" || bad "l not merged after leftover"
+  [ "$(full_runs l labeled)" = 2 ] && ok "l: a fresh full run at its turn (the old one is not counted)" || bad "l full runs $(full_runs l labeled)"
+  grep -c " unlabeled merge-turn" "$FAKE_GH/labels.log" | grep -qx 2 && ok "label removed before re-adding and after the merge" || bad "unlabel count: $(grep -c unlabeled "$FAKE_GH/labels.log")"
+}
+t_noop() {
+  echo "== noop: an open PR whose head is already pushed (no-op push) still gets its one full run from the label"; setup; gated
+  lane n fn; open_pr n
+  queue n; finish_all; show n
+  has n "merged" && ok "n merged" || bad "n not merged"
+  [ "$(full_runs n labeled)" = 1 ] && [ "$(cheap_runs n)" = 1 ] && [ "$(heads n | wc -w | tr -d ' ')" = 1 ] && ok "n: no new head, one cheap run from opening, one full run from the label" || bad "n: full $(full_runs n labeled) cheap $(cheap_runs n) heads $(heads n)"
+}
+t_prelabel() {
+  echo "== prelabel: ORCH_TURN_LABEL on while the workflow is not gated yet: the push's full run counts"; setup; gated
+  export FAKE_UNGATED=1
+  # (A red branch's identical-commit second attempt would get no new run here and fail after 15 min: not tested.)
+  lane p fp
+  queue p; finish_all; show p
+  has p "GitHub CI passed" && has p "merged" && [ "$(full_runs p sync)" = 1 ] && ok "p merged on the push's full run" || bad "p: full sync runs $(full_runs p sync)"
+}
+[ $# -gt 0 ] || set -- fifo red flake twofail conflict legacy label race leftover noop prelabel
 for t in "$@"; do "t_$t"; [ -n "${KEEP:-}" ] || rm -rf "$T"; done
 echo "== $FAILS failure(s)"; [ "$FAILS" = 0 ]
