@@ -96,6 +96,12 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - After a FAIL: the builder (or a fixer) fixes; a **delta review** covers only the fix commits
   (`templates/delta-review-prompt.md`). Cap loops (≈2 rounds); then escalate to the user.
 - Reviewers never modify the branch; they run only the branch's changed tests, each alone.
+- **Real-browser verification for app-wide client changes.** If a branch runs on every page or touches page loading,
+  reload/recovery, inline or head scripts, routing, caching headers, session/auth refresh or global error boundaries,
+  the builder must run the production build in real browsers (e.g. Playwright Chromium and WebKit, desktop and phone
+  width), signed in and out, idle for minutes (clock fast-forward), with focus/visibility changes, a session refresh and
+  a client navigation, and report the evidence: no self-reload, no error page, no console errors. The reviewer repeats
+  the check and fails the branch without it. Unit tests and review alone missed a site-wide self-reload loop.
 - If a reviewer is blocked by a permission check, it notes it and does not work around it; CI covers the gap.
 
 ## 4. Merge train
@@ -213,6 +219,9 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 
 ## 10. Lessons (failures seen in practice, and the fix)
 
+- **A page-load recovery script took the whole site down** — it passed unit tests and review, but in real Chrome the
+  router re-ran the inline head script, and every page reloaded itself after 30 s and then showed an error. Verify
+  app-wide client changes in real browsers, idle for minutes (§3).
 - **Fourteen PRs in one afternoon backed the queue up for hours** — one branch per small request meant fourteen reviews,
   PR texts and serial CI runs on one runner. Bundle small requests per area (§1 Granularity).
 - **Waiters keyed on parent refs looped forever** — GitHub deletes merged branches. Key every waiter on PR merged
