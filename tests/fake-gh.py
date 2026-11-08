@@ -9,6 +9,8 @@ CI for a commit (only commits that are, or were, a PR head) is decided by its tr
 a PR head that conflicts with main gets no checks at all (like GitHub); `pr view` reports mergeable
 $FAKE_GH/fail-view present          -> `pr view` fails (GitHub unreachable)
   file "flaky"                     -> the first run on a commit fails, a rerun (`gh run rerun --failed`) passes
+  file "infra-flake" (content K, default 1) -> the first K runs fail with an infrastructure error in the run log (HTTP 503)
+  file "infra-always"              -> every run fails with an infrastructure error in the run log
   file "slow"                      -> pending for $FAKE_SLOW queries (default 8), else $FAKE_PENDING (default 2)
 Every CI start (a new head on an open PR, or a rerun) is appended to $FAKE_GH/triggers.log.
 Every commit whose CI reached a verdict is appended once to $FAKE_GH/ci-runs.log ("<sha> pass|fail").
@@ -104,7 +106,8 @@ def ci(sha):
     if c["n"] == 0 and c["runs"] == 1 and conflicting(sha): return None   # no pull_request CI on a conflicting PR
     c["n"] += 1; json.dump(c, open(cf, "w"))
     if c["n"] <= need: return "pending"
-    v = "fail" if red or ("flaky" in files and c["runs"] == 1) else "pass"
+    k = int(git("show", f"{sha}:infra-flake").stdout.strip() or 1) if "infra-flake" in files else 0
+    v = "fail" if red or ("flaky" in files and c["runs"] == 1) or "infra-always" in files or c["runs"] <= k else "pass"
     if c["n"] == need + 1: open(f"{ST}/ci-runs.log", "a").write(f"{sha} {v}\n")
     return v
 
@@ -140,7 +143,18 @@ if a[0] == "api":
     out({"total_count": len(runs), "check_runs": runs}, a); sys.exit(0)
 if a[:2] == ["run", "list"]:
     sha = opt(a, "--commit"); v = ci(sha) if os.path.exists(f"{ST}/ci/{sha}") else None
-    out([] if v is None else [{"databaseId": int(sha[:7], 16), "conclusion": "failure" if v == "fail" else ("success" if v == "pass" else "")}], a); sys.exit(0)
+    out([] if v is None else [{"databaseId": int(sha[:7], 16), "status": "in_progress" if v == "pending" else "completed",
+          "conclusion": "failure" if v == "fail" else ("success" if v == "pass" else "")}], a); sys.exit(0)
+if a[:2] == ["run", "view"] and "--log-failed" in a:
+    for f in os.listdir(f"{ST}/ci"):
+        if int(f[:7], 16) == int(a[2]):
+            files = set(git("ls-tree", "-r", "--name-only", f).stdout.split())
+            if files & {"infra-flake", "infra-always"}:
+                print("unit\tSet up job\t2026-01-01T00:00:00Z curl: (22) The requested URL returned error: 503")
+                print("unit\tSet up job\t2026-01-01T00:00:01Z ##[error]Process completed with exit code 22.")
+            else:
+                print("unit\tRun tests\t2026-01-01T00:00:00Z \x1b[31m FAIL \x1b[39m src/a.test.ts > b")
+    sys.exit(0)
 if a[:2] == ["run", "rerun"]:
     for f in os.listdir(f"{ST}/ci"):
         if int(f[:7], 16) == int(a[2]):

@@ -123,6 +123,15 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     one rerun (merge main again; if the commit is identical, `gh run rerun --failed`, printed as `rerunning the
     failed CI`); a second failure with no new commits → `MERGE FAIL CI: ... (removed after 2 attempts; requeue after
     fixing)`. So for a red branch: fix and push; the queued item picks the fix up at its turn (no requeue needed).
+  - **Head moved while waiting:** if the PR head changes during the CI wait (a fix was pushed), `ci-wait.sh` stops at
+    once (exit 4, `HEAD MOVED: head moved from X to Y; requeue to test the new head`). Not a failure: the item keeps its
+    position and attempt count (`<wt> stays at position N`) and its next turn tests the new head.
+  - **Infra-outage tolerance:** when every failed run's `--log-failed` shows an infrastructure error (HTTP 5xx such as
+    `Unexpected HTTP response: 504`, `curl: (22) ... error: 503`, download failures; patterns in `ci-infra.sh`) and no
+    real test failure, `ci-wait.sh` reruns the failed jobs (`gh run rerun --failed`) after a backoff and keeps waiting;
+    it prints no `MERGE FAIL CI` and no attempt is used. `ORCH_INFRA_RERUNS` (default 6, 0 = off) caps the reruns,
+    `ORCH_INFRA_BACKOFF` (default 300 s, grows per rerun up to 600 s) is the wait. Exhausted → a normal
+    `MERGE FAIL CI: ... (infra outage persisted after N reruns)`. Any real test failure counts at once.
   - **Label-gated CI (`ORCH_TURN_LABEL`, e.g. `merge-turn`; unset = off).** For a repo whose workflow runs the full PR
     suite only while the PR carries that label (other pushes to an open PR run only cheap jobs, so fix pushes never
     hold a CI runner outside their turn). At the turn, `merge-pr.sh` records the commit's existing workflow runs,

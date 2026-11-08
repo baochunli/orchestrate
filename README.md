@@ -31,7 +31,7 @@ SKILL.md                      procedure the supervisor follows (lane flow, routi
 agents/                       subagent definitions (symlink into ~/.claude/agents/)
   orch-builder.md  orch-reviewer.md  orch-resolver.md
 scripts/                      merge train and lane tooling (see below)
-  orch-env.sh  run-pipe.sh  merge-seq.sh  merge-queue.sh  train.sh  merge-pr.sh  ci-wait.sh  wait-merged.sh
+  orch-env.sh  run-pipe.sh  merge-seq.sh  merge-queue.sh  train.sh  merge-pr.sh  ci-wait.sh  ci-wait-core.sh  ci-infra.sh  wait-merged.sh
   merge-queue-len.sh  launch.sh  pipeline.sh  review-chain.sh  wait-lanes.sh  lane-busy.sh
   watch-all.sh  cleanup-merged.sh
 templates/                    briefs and prompts to copy and fill
@@ -52,7 +52,7 @@ Run them from anywhere inside the repo, or set `ORCH_REPO`.
 | `merge-queue.sh item\|runner` | Queue item and the single runner (lock → front item: merge main, push, PR, one CI run, merge; red → end of the queue, one rerun, then removed). `merge-batch.sh` is a retired shim. |
 | `train.sh <wt> <tag>` | Merge the default branch into the lane; optional `ORCH_LOCAL_GATES`. Exit 3 = conflict. |
 | `merge-pr.sh <wt> <branch> <stem> "<gates>"` | Push, create/update PR from `pr/<stem>.txt`, wait for CI, merge, clean up. |
-| `ci-wait.sh <PR-url> <sha>` | Wait for every check on the exact commit; `MERGE FAIL CI: ...` on failure. With `ORCH_TURN_LABEL` (label-gated CI), wait for a run started at the turn whose `ORCH_REQUIRED_CHECK` job succeeded; skipped checks never pass. |
+| `ci-wait.sh <PR-url> <sha>` | Wait for every check on the exact commit; `MERGE FAIL CI: ...` on failure. With `ORCH_TURN_LABEL` (label-gated CI), wait for a run started at the turn whose `ORCH_REQUIRED_CHECK` job succeeded; skipped checks never pass. Exit 4 + `HEAD MOVED: ...` when the PR head changes while waiting (requeued without using an attempt); failures whose log shows only an infra error (HTTP 5xx, download) are rerun up to `ORCH_INFRA_RERUNS` (default 6) with `ORCH_INFRA_BACKOFF` (default 300 s) and never count as an attempt. Patterns: `ci-infra.sh`; polling: `ci-wait-core.sh`. |
 | `wait-merged.sh <parent> [file] -- <cmd...>` | Run a command once the parent branch's PR is MERGED (stacked branches). |
 | `merge-queue-len.sh [--real\|--list]` | Count live merge-seq processes; `--list` prints the queue in order. |
 | `launch.sh <lane> <dir> <effort> "<prompt>"` | Start an external herdr lane (MODEL, KIND); prints STARTED / WAITING / LAUNCH FAIL. |

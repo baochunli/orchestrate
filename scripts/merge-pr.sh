@@ -3,6 +3,7 @@
 # Pushes the lane, creates or updates its PR from $ORCH_PR/<prfile-stem>.txt (line 1 = title, line 3+ = body,
 # "[GATES]" replaced by the gates text), waits for every check on the EXACT pushed commit (ORCH_CI_GATE=on), merges
 # with --match-head-commit (CI wait: ci-wait.sh), then removes the worktree and branch. Prints "MERGE FAIL ..." and leaves the PR open on failure.
+# Exit 4 + "HEAD MOVED: ..." (from ci-wait.sh): the PR head changed while waiting; not a CI failure, the PR stays open.
 # ORCH_TURN_LABEL set (label-gated CI): records the commit's existing workflow runs before the push, then removes the
 # label if a crashed turn left it and adds it, so the "labeled" event starts the one full run even when the push was a
 # no-op; ci-wait.sh judges only runs started after that point. The label is removed whenever this script exits.
@@ -42,7 +43,7 @@ if [ -n "${ORCH_TURN_LABEL:-}" ]; then
   echo "added the $ORCH_TURN_LABEL label (the full CI run for this turn)"
 fi
 sleep "${ORCH_CI_SLEEP:-10}"
-"$ORCH_SKILL_DIR/ci-wait.sh" "$URL" "$H" || exit 1
+"$ORCH_SKILL_DIR/ci-wait.sh" "$URL" "$H" || exit $?   # rc 4 = "HEAD MOVED" (not a CI failure)
 gh pr merge "$URL" --merge --match-head-commit "$H" || true
 for _ in 1 2 3 4 5 6; do [ "$(gh pr view "$URL" --json state -q .state)" = MERGED ] && break; sleep "${ORCH_CI_SLEEP:-10}"; done
 [ "$(gh pr view "$URL" --json state -q .state)" = MERGED ] || { echo "MERGE FAIL: $URL not merged"; exit 1; }; echo merged

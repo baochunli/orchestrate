@@ -14,6 +14,9 @@
 #         At its next turn: head changed (a fix was pushed or committed) -> a fresh attempt; unchanged -> one rerun
 #         (merge main again; same commit -> `gh run rerun --failed`), and a second failure removes it:
 #         "MERGE FAIL CI: ... (removed after 2 attempts; requeue after fixing)". Runner log: $ORCH_PIPES/merge-queue.out.
+#         The PR head moving during the CI wait (a fix pushed) is not a failure: ci-wait.sh exits 4 ("HEAD MOVED: ..."),
+#         the item keeps its position and attempt count and its next turn tests the new head. A CI failure whose log shows
+#         only an infrastructure error (HTTP 5xx, download failure) is rerun inside ci-wait.sh and never counts as an attempt.
 #         ORCH_TURN_LABEL set (label-gated CI): merge-pr.sh adds the label at the turn (that starts the one full run)
 #         and removes it when the turn ends; an identical-commit second attempt gets a fresh full run instead of a rerun.
 # Legacy: items left in $ORCH_RUN/batch-queue/ by the retired batch train are drained first, one classic train each.
@@ -125,6 +128,10 @@ turn() {
   [ "$rr" = label ] && emit "$s" note "$wt rerunning the full CI on ${post:0:9} via the $ORCH_TURN_LABEL label (attempt 2)"
   "$BIN/merge-pr.sh" "$wt" "$br" "$s" "$G" 2>&1 | grep -vE "^remote:" > "$res"
   if grep -qx "merged" "$res"; then final "$s" "$wt gates: $G" "$(cat "$res")"; return; fi
+  if grep -q "^HEAD MOVED: " "$res"; then   # a fix was pushed while CI ran: not a failure; same position, same attempt count
+    emit "$s" note "$wt $(grep -m1 '^HEAD MOVED: ' "$res" | cut -c13-)" "$wt stays at position $(position "$s") (not a CI failure; no attempt used)"
+    return
+  fi
   if grep -q "^MERGE FAIL CI: " "$res"; then
     if [ "$fails" -ge 1 ]; then
       sed -e 's/^\(MERGE FAIL CI: .*\)$/\1 (removed after 2 attempts; requeue after fixing)/' "$res" > "$res.t" && mv "$res.t" "$res"

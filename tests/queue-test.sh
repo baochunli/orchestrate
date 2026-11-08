@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2015,SC2012  # ok/bad chains and ls counts are deliberate in this harness
 # usage: queue-test.sh [scenario...]   (default: all) — local FIFO merge-train tests: a bare origin, a fake gh, no GitHub.
-# Scenarios: fifo red flake twofail conflict legacy (ORCH_TURN_LABEL unset), label race leftover noop (label-gated CI), prelabel (setting on, workflow not yet gated)
+# Scenarios: fifo red flake twofail conflict legacy infra infraexhausted realfail headmoved (ORCH_TURN_LABEL unset), label race leftover noop (label-gated CI), prelabel (setting on, workflow not yet gated)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); S=${ORCH_TEST_SCRIPTS:-$(cd "$HERE/../scripts" && pwd)}
 FAILS=0
@@ -14,7 +14,7 @@ setup() {
   printf '#!/bin/sh\necho %s\n' "'{\"result\":{\"agents\":[]}}'" > "$T/bin/herdr"; chmod +x "$T/bin/gh" "$T/bin/herdr"
   export PATH="$T/bin:$PATH" FAKE_GH=$T/gh FAKE_BARE=$T/origin.git
   export ORCH_REPO=$T/app ORCH_STATE=$T/state ORCH_WT_PREFIX=$T/app- ORCH_POLL=1 ORCH_CI_SLEEP=1 ORCH_CI_GATE=on
-  unset FAKE_TURN_LABEL FAKE_LABEL_DELAY FAKE_UNGATED ORCH_TURN_LABEL ORCH_REQUIRED_CHECK ORCH_CI_RUNS_BEFORE ORCH_LOCAL_GATES ORCH_POST_MERGE ORCH_RUN ORCH_PR ORCH_LOGS ORCH_PIPES ORCH_BRIEFS ORCH_REPORTS ORCH_REVIEWS ORCH_PLANS ORCH_ARTIFACTS ORCH_SKILL_DIR
+  unset FAKE_TURN_LABEL FAKE_LABEL_DELAY FAKE_UNGATED ORCH_TURN_LABEL ORCH_REQUIRED_CHECK ORCH_INFRA_RERUNS ORCH_INFRA_BACKOFF ORCH_CI_RUNS_BEFORE ORCH_LOCAL_GATES ORCH_POST_MERGE ORCH_RUN ORCH_PR ORCH_LOGS ORCH_PIPES ORCH_BRIEFS ORCH_REPORTS ORCH_REVIEWS ORCH_PLANS ORCH_ARTIFACTS ORCH_SKILL_DIR
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@x GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@x
   git init -q --bare -b main "$FAKE_BARE"; git clone -q "$FAKE_BARE" "$ORCH_REPO" 2>/dev/null
   printf 'one\ntwo\nthree\n' > "$ORCH_REPO/shared.txt"; git -C "$ORCH_REPO" add -A; git -C "$ORCH_REPO" commit -qm init
@@ -107,6 +107,42 @@ t_legacy() {
   kill "$OWN"; wait "$OWN" 2>/dev/null
   head -1 "$ORCH_STATE/run/batch-result/l" | grep -qx "done" && grep -qx merged "$ORCH_STATE/run/batch-result/l" && ok "batch-result/l: done + merged" || bad "legacy result: $(cat "$ORCH_STATE/run/batch-result/l" 2>/dev/null)"
 }
+t_infra() {
+  echo "== infra: a failure whose log shows only an HTTP 503 is rerun inside ci-wait, never counted as an attempt"; setup
+  lane i infra-flake; printf '2\n' > "${ORCH_WT_PREFIX}i/infra-flake"; git -C "${ORCH_WT_PREFIX}i" commit -qam "Two infra failures."
+  queue i; finish_all; show i
+  has i "merged" && ok "i merged" || bad "i not merged"
+  ! has i "MERGE FAIL CI" && ! has i "moved to the end" && ok "no CI failure reported, not moved to the end" || bad "infra failure was counted"
+  [ "$(grep -c '^rerun ' "$FAKE_GH/triggers.log")" = 2 ] && ok "two reruns of the failed run" || bad "reruns: $(grep -c '^rerun ' "$FAKE_GH/triggers.log")"
+  grep -q "infra outage in the failed CI log" "$ORCH_STATE/pipes/merge-queue.out" "$ORCH_STATE/logs/merge-queue-i.out" 2>/dev/null && ok "infra rerun logged" || bad "no infra rerun line"
+}
+t_infraexhausted() {
+  echo "== infraexhausted: an outage that outlasts ORCH_INFRA_RERUNS counts as a failure ('infra outage persisted')"; setup
+  export ORCH_INFRA_RERUNS=2
+  lane i infra-always
+  queue i; finish_all; show i
+  has i "infra outage persisted after 2 reruns" && ok "MERGE FAIL CI says the outage persisted" || bad "no persisted line"
+  has i "moved to the end of the merge queue" && has i "removed after 2 attempts" && ok "counted as 2 attempts, then removed" || bad "attempt accounting wrong"
+}
+t_realfail() {
+  echo "== realfail: a real test failure in the log is never treated as an outage (no rerun inside ci-wait)"; setup
+  lane r early-red
+  queue r; finish_all
+  has r "moved to the end of the merge queue" && ok "r counted as a failure" || bad "r not moved"
+  ! grep -q "infra outage in the failed CI log" "$ORCH_STATE/pipes/merge-queue.out" && ok "no infra rerun" || bad "treated a real failure as an outage"
+}
+t_headmoved() {
+  echo "== headmoved: a fix pushed while CI runs stops the wait; same position, no attempt used, new head tested"; setup
+  lane h slow; lane b fb
+  hold; queue h b; release
+  for _ in $(seq 120); do [ "$(triggers h)" -ge 1 ] && break; sleep 0.25; done
+  echo fixed > "${ORCH_WT_PREFIX}h/fix"; git -C "${ORCH_WT_PREFIX}h" add -A; git -C "${ORCH_WT_PREFIX}h" commit -qm "Fixed h."; git -C "${ORCH_WT_PREFIX}h" push -q origin h-t1
+  finish_all; show h b
+  has h "head moved from" && has h "requeue to test the new head" && ok "head-moved reported" || bad "no head-moved line"
+  has h "stays at position 1" && ok "kept position 1" || bad "position line missing"
+  ! has h "MERGE FAIL CI" && ! has h "attempt 2" && ok "no failure, no attempt used" || bad "counted as a failure"
+  [ "$(merged_order)" = "h b" ] && [ "$(triggers h)" = 2 ] && ok "h merged first on the new head (2 heads), then b" || bad "order $(merged_order) triggers $(triggers h)"
+}
 # ---- label-gated CI (the workflow runs its full suite on a PR only while it carries the merge-turn label)
 gated() { export FAKE_TURN_LABEL=merge-turn ORCH_TURN_LABEL=merge-turn ORCH_REQUIRED_CHECK=publish; }
 full_runs() { local h; for h in $(heads "$1"); do grep -c "^$h $2" "$FAKE_GH/full-runs.log" 2>/dev/null; done | awk '{s+=$1} END {print s+0}'; }
@@ -167,6 +203,6 @@ t_prelabel() {
   queue p; finish_all; show p
   has p "GitHub CI passed" && has p "merged" && [ "$(full_runs p sync)" = 1 ] && ok "p merged on the push's full run" || bad "p: full sync runs $(full_runs p sync)"
 }
-[ $# -gt 0 ] || set -- fifo red flake twofail conflict legacy label race leftover noop prelabel
+[ $# -gt 0 ] || set -- fifo red flake twofail conflict legacy infra infraexhausted realfail headmoved label race leftover noop prelabel
 for t in "$@"; do "t_$t"; [ -n "${KEEP:-}" ] || rm -rf "$T"; done
 echo "== $FAILS failure(s)"; [ "$FAILS" = 0 ]

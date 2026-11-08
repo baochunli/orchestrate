@@ -1,56 +1,47 @@
 #!/bin/bash
 # usage: ci-wait.sh <PR-url> <commit-sha>
-# Waits for every check on the EXACT commit (so an earlier head's green checks cannot pass the gate), then for the PR's
-# checks. Prints "GitHub CI passed (N min)" and exits 0, or prints "MERGE FAIL CI: ..." and exits 1.
-# With ORCH_CI_GATE=off it prints "CI gate off; merging without waiting" and exits 0.
-# Timeouts: 15 min for checks to appear, 180 min pending. ORCH_CI_SLEEP (tests only) replaces every poll interval.
-# ORCH_TURN_LABEL set (label-gated CI: the PR's full suite runs only while it carries that label; merge-pr.sh adds it
-# at the turn): skipped checks never pass. It judges the workflow RUNS on the exact commit that are not listed in
-# ORCH_CI_RUNS_BEFORE (run IDs that existed before the turn's push; merge-pr.sh sets it): once none is pending, any
-# failed run fails the gate, and it passes only when a successful run's job named ORCH_REQUIRED_CHECK succeeded.
-# Cheap runs (the required job skipped) and cancelled runs are ignored; 15 min with no pending or passing run fails.
+# Waits for every check on the EXACT commit (ci-wait-core.sh holds the polling logic and the gate rules; see its header
+# for ORCH_CI_GATE, ORCH_TURN_LABEL / ORCH_REQUIRED_CHECK / ORCH_CI_RUNS_BEFORE and the timeouts).
+# Prints "GitHub CI passed (N min)" and exits 0, or prints "MERGE FAIL CI: ..." and exits 1. Two extra outcomes:
+#  - exit 4 + "HEAD MOVED: head moved from X to Y; requeue to test the new head": the PR head changed while waiting
+#    (a fix was pushed). Not a CI failure; merge-queue.sh requeues at the same position without using an attempt.
+#  - infra-outage tolerance: when every failed run's failed-step log shows an infrastructure error (HTTP 5xx, download
+#    failures; patterns in ci-infra.sh) and no real test failure, the failed jobs are rerun (`gh run rerun --failed`)
+#    after a backoff and the wait resumes; no "MERGE FAIL CI" line is printed for those. ORCH_INFRA_RERUNS (default 6,
+#    0 = off) caps the reruns; ORCH_INFRA_BACKOFF (default 300 s) is the first wait, growing by that much per rerun up
+#    to 600 s. Exhausted: "MERGE FAIL CI: ... (infra outage persisted after N reruns)". ORCH_CI_SLEEP replaces sleeps.
 . "$(dirname "$0")/orch-env.sh"
+. "$(dirname "$0")/ci-infra.sh"
 URL=$1; HS=$2
-nap() { sleep "${ORCH_CI_SLEEP:-$1}"; }
-if [ "$ORCH_CI_GATE" != on ]; then echo "CI gate off; merging without waiting"; exit 0; fi
-echo "waiting for GitHub CI on $URL"; t0=$(date +%s)
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-if [ -n "${ORCH_TURN_LABEL:-}" ]; then
-  [ -n "${ORCH_REQUIRED_CHECK:-}" ] || { echo "MERGE FAIL CI: ORCH_TURN_LABEL is set but ORCH_REQUIRED_CHECK is not"; exit 1; }
-  before=" ${ORCH_CI_RUNS_BEFORE:-} "; t1=$t0
-  while :; do
-    pending=0; passed=; failed=
-    runs=$(gh api "repos/$REPO/actions/runs?head_sha=$HS&event=pull_request&per_page=100" --jq '.workflow_runs[] | "\(.id) \(.status) \(.conclusion)"' 2>/dev/null) || pending=1
-    while read -r id st co; do
-      [ -n "$id" ] || continue
-      case "$before" in *" $id "*) continue ;; esac
-      if [ "$st" != completed ]; then pending=1; continue; fi
-      case "$co" in
-        success) gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | "\(.conclusion) \(.name)"' 2>/dev/null \
-                   | grep -qxF "success $ORCH_REQUIRED_CHECK" && passed=$id ;;
-        failure|timed_out|startup_failure|action_required) failed="$failed $id" ;;
-      esac   # cancelled (superseded), skipped, neutral: ignored
-    done <<<"$runs"
-    if [ "$pending" = 0 ]; then
-      if [ -n "$failed" ]; then
-        bad=$(for id in $failed; do gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
-          --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out") | .name' 2>/dev/null; done | sort -u | paste -sd, -)
-        echo "MERGE FAIL CI: ${bad:-a workflow run} failed on $URL (PR left open)"; exit 1; fi
-      [ -n "$passed" ] && { echo "GitHub CI passed ($(( ($(date +%s) - t0) / 60 )) min)"; exit 0; }
-      [ $(( $(date +%s) - t1 )) -gt 900 ] && { echo "MERGE FAIL CI: no full CI run ($ORCH_REQUIRED_CHECK) on $HS within 15 min of the $ORCH_TURN_LABEL label"; exit 1; }
-    else t1=$(date +%s); fi
-    [ $(( $(date +%s) - t0 )) -gt 10800 ] && { echo "MERGE FAIL CI: $HS still pending after 180 min"; exit 1; }
-    nap 60
-  done
-fi
-until [ "$(gh api "repos/$REPO/commits/$HS/check-runs" --jq '.total_count' 2>/dev/null || echo 0)" -gt 0 ]; do
-  nap 20; [ $(( $(date +%s) - t0 )) -gt 900 ] && { echo "MERGE FAIL CI: no checks for $HS after 15 min"; exit 1; }; done
-until [ "$(gh api "repos/$REPO/commits/$HS/check-runs" --jq '[.check_runs[]|select(.status!="completed")]|length' 2>/dev/null || echo 1)" = 0 ]; do
-  nap 60; [ $(( $(date +%s) - t0 )) -gt 10800 ] && { echo "MERGE FAIL CI: $HS still pending after 180 min"; exit 1; }; done
-until [ -n "$(gh pr checks "$URL" --json name -q '.[].name' 2>/dev/null)" ]; do
-  nap 30; [ $(( $(date +%s) - t0 )) -gt 900 ] && { echo "MERGE FAIL CI: no checks registered on $URL after 15 min"; exit 1; }; done
-while [ -n "$(gh pr checks "$URL" --json bucket -q '.[] | select(.bucket=="pending") | .bucket' 2>/dev/null)" ]; do
-  nap 60; [ $(( $(date +%s) - t0 )) -gt 10800 ] && { echo "MERGE FAIL CI: still pending after 180 min on $URL"; exit 1; }; done
-bad=$(gh pr checks "$URL" --json name,bucket -q '.[] | select(.bucket=="fail" or .bucket=="cancel") | .name' | paste -sd, -)
-[ -z "$bad" ] || { echo "MERGE FAIL CI: $bad failed on $URL (PR left open)"; exit 1; }
-echo "GitHub CI passed ($(( ($(date +%s) - t0) / 60 )) min)"
+max=${ORCH_INFRA_RERUNS:-6}; base=${ORCH_INFRA_BACKOFF:-300}; n=0
+TAG="CI FAIL (checking for infra outage): "
+core="$(dirname "$0")/ci-wait-core.sh"
+while :; do
+  tmp=$(mktemp "${TMPDIR:-/tmp}/ci-wait.XXXXXX")
+  "$core" "$URL" "$HS" 2>&1 | sed -u "s/^MERGE FAIL CI: /$TAG/" | tee "$tmp"; rc=${PIPESTATUS[0]}
+  fail=$(sed -n "s/^$TAG/MERGE FAIL CI: /p" "$tmp" | tail -1); rm -f "$tmp"
+  if [ "$rc" != 1 ] || [ -z "$fail" ]; then exit "$rc"; fi
+  cur=$(gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null || true)
+  if [ -n "$cur" ] && [ "$cur" != "$HS" ]; then
+    echo "HEAD MOVED: head moved from ${HS:0:9} to ${cur:0:9}; requeue to test the new head"; exit 4; fi
+  infra=0; ids=
+  if [ "$max" -gt 0 ]; then
+    before=" ${ORCH_CI_RUNS_BEFORE:-} "
+    for id in $(gh run list --commit "$HS" --json databaseId,conclusion -q '.[] | select(.conclusion=="failure" or .conclusion=="timed_out") | .databaseId' 2>/dev/null); do
+      case "$before" in *" $id "*) continue ;; esac; ids="$ids $id"; done
+    if [ -n "$ids" ]; then
+      infra=1; lg=$(mktemp "${TMPDIR:-/tmp}/ci-log.XXXXXX")
+      for id in $ids; do gh run view "$id" --log-failed > "$lg" 2>/dev/null || true; infra_only "$lg" || infra=0; done
+      rm -f "$lg"
+    fi
+  fi
+  if [ "$infra" = 0 ]; then echo "$fail"; exit 1; fi
+  if [ "$n" -ge "$max" ]; then echo "$fail (infra outage persisted after $n reruns)"; exit 1; fi
+  n=$((n + 1)); d=$((base * n)); cap=$((base > 600 ? base : 600)); [ "$d" -gt "$cap" ] && d=$cap
+  echo "infra outage in the failed CI log (not a code failure, no merge attempt used): rerunning the failed jobs ($n/$max) after ${d}s"
+  sleep "${ORCH_CI_SLEEP:-$d}"
+  for id in $ids; do gh run rerun "$id" --failed >/dev/null 2>&1 || true; done
+  t0=$(date +%s)   # wait until the rerun is visible as not completed, so the next wait cannot read the old verdict
+  while [ -z "$(gh run list --commit "$HS" --json status -q '.[] | select(.status!="completed") | .status' 2>/dev/null)" ]; do
+    [ $(( $(date +%s) - t0 )) -gt 300 ] && break; sleep "${ORCH_CI_SLEEP:-10}"; done
+done
