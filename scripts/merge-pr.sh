@@ -14,6 +14,9 @@ wt=$ORCH_WT_PREFIX$1; br=$2; pf=$ORCH_PR/$3.txt; gates=$4
 cd "$wt"; git fetch -q "$ORCH_REMOTE"
 git merge-base --is-ancestor "$ORCH_REMOTE/$ORCH_MAIN" HEAD || { echo "MERGE FAIL STALE: $ORCH_MAIN moved"; exit 1; }
 [ -z "$(git status --short)" ] || { echo "MERGE FAIL DIRTY"; exit 1; }
+# A detached worktree would push the stale branch ref while CI waits on HEAD, so every
+# check reports "HEAD MOVED" forever (2026-11-09). Require the lane branch to be checked out.
+[ "$(git rev-parse --abbrev-ref HEAD)" = "$br" ] || { echo "MERGE FAIL DETACHED: $wt is not on $br (git checkout $br first)"; exit 1; }
 python3 - "$pf" "$gates" <<'PY'
 import sys; p,g=sys.argv[1],sys.argv[2]; s=open(p).read()
 if "[GATES]" in s: s=s.replace("[GATES]", g)
@@ -25,7 +28,7 @@ if [ -n "${ORCH_TURN_LABEL:-}" ]; then
   ORCH_CI_RUNS_BEFORE=$(gh api "repos/$REPO/actions/runs?head_sha=$H&event=pull_request&per_page=100" --jq '.workflow_runs[].id' 2>/dev/null | paste -sd' ' - || true)
   export ORCH_CI_RUNS_BEFORE
 fi
-git push -q -u "$ORCH_REMOTE" "$br"
+git push -q -u "$ORCH_REMOTE" "HEAD:refs/heads/$br"
 T=$(head -1 "$pf"); tail -n +3 "$pf" > "$pf.body"
 # A CI failure leaves the PR open; a later run reuses it (the push already updated its head).
 URL=$(gh pr list --head "$br" --state open --json url -q '.[0].url' 2>/dev/null || true)
