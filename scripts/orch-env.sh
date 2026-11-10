@@ -18,7 +18,10 @@
 #   ORCH_LANE_PREFIX  prefix of external lane names (default "orch"): <prefix>-<stem>-build, -rev, -rev2, <prefix>-pr-<stem>
 #   ORCH_KIND_MAP   space-separated <model-glob>=<kind> pairs choosing launch.sh's CLI, e.g. "muse-*=muse gpt-*=codex"
 #   ORCH_POST_MERGE optional command run after each merge with args: <worktree> <branch> <stem>
-ORCH_REPO=${ORCH_REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}
+# The main checkout, even when called from a linked worktree (lesson: a worktree's own top level named a
+# different state dir, so env.sh and its settings were silently skipped).
+_orch_common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+ORCH_REPO=${ORCH_REPO:-${_orch_common:+$(dirname "$_orch_common")}}
 [ -n "$ORCH_REPO" ] || { echo "orchestrate: set ORCH_REPO (no git repo here)" >&2; exit 2; }
 ORCH_STATE=${ORCH_STATE:-$HOME/.local/share/orchestrate/$(basename "$ORCH_REPO")}
 [ -f "$ORCH_STATE/env.sh" ] && . "$ORCH_STATE/env.sh"
