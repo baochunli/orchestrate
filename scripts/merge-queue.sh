@@ -42,6 +42,16 @@ nextseq() {
 order() { local f; for f in "$Q"/*; do [ -f "$f" ] && echo "$(qget "${f##*/}" seq) ${f##*/}"; done | sort -n | awk '{print $2}'; }
 position() { order | grep -nx -- "$1" | cut -d: -f1; }
 
+# urgent <stem>: move a queued stem to the front of the waiting items (a turn already running finishes first).
+urgent() {
+  local s=$1 min
+  [ -f "$Q/$s" ] || { echo "$s is not queued" >&2; return 1; }
+  min=$(order | head -1); min=$(qget "$min" seq)
+  qput "$s" "$(qget "$s" wt)" "$(qget "$s" branch)" "$((min - 1))" "$(qget "$s" owner)" "$(qget "$s" fails)" "$(qget "$s" failhead)"
+  log "$s: marked urgent; next in the merge queue (position $(position "$s"))" >> "$ORCH_PIPES/merge-queue.out"
+  echo "$s is next in the merge queue (position $(position "$s"))"
+}
+
 # ---------------------------------------------------------------- item
 spawn_runner() {
   local lp; lp=$(lock_pid)
@@ -174,5 +184,6 @@ runner() {
 case "${1:-}" in
   item) item "$2" ;;
   runner) runner ;;
-  *) echo "usage: merge-queue.sh item <wt>:<branch>:<stem> | runner" >&2; exit 2 ;;
+  urgent) urgent "${2:?usage: merge-queue.sh urgent <stem>}" ;;
+  *) echo "usage: merge-queue.sh item <wt>:<branch>:<stem> | runner | urgent <stem>" >&2; exit 2 ;;
 esac

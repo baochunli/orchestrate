@@ -107,6 +107,13 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 ## 4. Merge train
 
 - `merge-seq.sh` is a **FIFO** train: one branch at a time, one CI run per attempt (`merge-queue.sh`).
+  - **Urgent work goes first** (the one exception to FIFO). Classify every lane as urgent or not when you create it
+    and log it. Urgent = a real user blocked in production, a production bug or data/confidentiality problem, a
+    security fix, or the owner says so; polish, copy, refactors, docs and test infrastructure are not. When an urgent
+    branch is reviewed and queued, run `merge-queue.sh urgent <stem>`: it becomes the next turn (a turn already in CI
+    finishes first) and prints its position. Hold queued non-urgent branches that touch the same files (do not queue
+    them, or stop their waiting merge-seq by PID) until the urgent one has merged, so it never resolves conflicts
+    caused by less important work. Tell the owner to deploy as soon as it merges and main CI is green.
   - **Enqueue:** checks the worktree (`TRAIN rc=2`, `MERGE FAIL DIRTY`), pushes the branch only if it has no open PR
     (a push to an open PR starts CI), and appends it to `$ORCH_RUN/merge-queue/<stem>` with the next sequence number:
     `<wt> queued at position N`. It never opens or updates the PR. Requeueing a queued stem keeps its position
@@ -147,7 +154,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   - Stopping a waiting merge-seq by PID removes its item (never stop the runner). Runner log: `pipes/merge-queue.out`.
   - The batch train and `merge-priority` are retired; `merge-batch.sh` is a shim, and the runner drains any
     leftover `$ORCH_RUN/batch-queue/` items first with classic trains.
-  - Tests: `tests/queue-test.sh` (bare origin + fake `gh`; fifo, red, flake, twofail, conflict, legacy; label-gated:
+  - Tests: `tests/queue-test.sh` (bare origin + fake `gh`; fifo, red, flake, twofail, conflict, legacy, urgent; label-gated:
     label, race, leftover, noop, prelabel).
 - **Outcomes you must act on** (in `pipes/<branch>.out`):
   - `TRAIN rc=3` + `CONFLICT` + files → resolve (yourself if it is a mechanical "both added" — e.g. registry or list

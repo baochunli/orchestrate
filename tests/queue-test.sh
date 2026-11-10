@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2015,SC2012  # ok/bad chains and ls counts are deliberate in this harness
 # usage: queue-test.sh [scenario...]   (default: all) — local FIFO merge-train tests: a bare origin, a fake gh, no GitHub.
-# Scenarios: fifo red flake twofail conflict legacy infra infraexhausted realfail headmoved (ORCH_TURN_LABEL unset), label race leftover noop (label-gated CI), prelabel (setting on, workflow not yet gated)
+# Scenarios: fifo red flake twofail conflict legacy infra infraexhausted realfail headmoved urgent (ORCH_TURN_LABEL unset), label race leftover noop (label-gated CI), prelabel (setting on, workflow not yet gated)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); S=${ORCH_TEST_SCRIPTS:-$(cd "$HERE/../scripts" && pwd)}
 FAILS=0
@@ -195,6 +195,17 @@ t_noop() {
   has n "merged" && ok "n merged" || bad "n not merged"
   [ "$(full_runs n labeled)" = 1 ] && [ "$(cheap_runs n)" = 1 ] && [ "$(heads n | wc -w | tr -d ' ')" = 1 ] && ok "n: no new head, one cheap run from opening, one full run from the label" || bad "n: full $(full_runs n labeled) cheap $(cheap_runs n) heads $(heads n)"
 }
+t_urgent() {
+  echo "== urgent: an urgent stem queued last jumps ahead of the waiting items; the others keep their order"; setup
+  lane d fd; lane b fb; lane u fu
+  hold; queue d b u
+  out=$("$S/merge-queue.sh" urgent u)
+  echo "$out" | grep -q "u is next in the merge queue (position 1)" && ok "urgent reports position 1" || bad "urgent said: $out"
+  [ "$("$S/merge-queue-len.sh" --list | awk '{print $2}' | paste -sd' ' -)" = "u d b" ] && ok "list is u d b" || bad "list: $("$S/merge-queue-len.sh" --list)"
+  "$S/merge-queue.sh" urgent nosuch >/dev/null 2>&1 && bad "unknown stem accepted" || ok "unknown stem refused"
+  release; finish_all; show d b u
+  [ "$(merged_order)" = "u d b" ] && ok "merged u d b" || bad "merge order: $(merged_order)"
+}
 t_prelabel() {
   echo "== prelabel: ORCH_TURN_LABEL on while the workflow is not gated yet: the push's full run counts"; setup; gated
   export FAKE_UNGATED=1
@@ -203,6 +214,6 @@ t_prelabel() {
   queue p; finish_all; show p
   has p "GitHub CI passed" && has p "merged" && [ "$(full_runs p sync)" = 1 ] && ok "p merged on the push's full run" || bad "p: full sync runs $(full_runs p sync)"
 }
-[ $# -gt 0 ] || set -- fifo red flake twofail conflict legacy infra infraexhausted realfail headmoved label race leftover noop prelabel
+[ $# -gt 0 ] || set -- fifo red flake twofail conflict legacy infra infraexhausted realfail headmoved urgent label race leftover noop prelabel
 for t in "$@"; do "t_$t"; [ -n "${KEEP:-}" ] || rm -rf "$T"; done
 echo "== $FAILS failure(s)"; [ "$FAILS" = 0 ]
