@@ -114,6 +114,10 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     finishes first) and prints its position. Hold queued non-urgent branches that touch the same files (do not queue
     them, or stop their waiting merge-seq by PID) until the urgent one has merged, so it never resolves conflicts
     caused by less important work. Tell the owner to deploy as soon as it merges and main CI is green.
+  - **Sweeping changes run at a quiet time.** A change that touches most of the codebase (typography or copy
+    conversion, project-wide renames, codemods, formatter changes, full screenshot recaptures) starts only when the
+    merge queue is empty and no other lanes are building, merges before new lanes start, and new work branches from
+    its result. Otherwise every lane in flight inherits conflicts with it. Urgent work still preempts it.
   - **Enqueue:** checks the worktree (`TRAIN rc=2`, `MERGE FAIL DIRTY`), pushes the branch only if it has no open PR
     (a push to an open PR starts CI), and appends it to `$ORCH_RUN/merge-queue/<stem>` with the next sequence number:
     `<wt> queued at position N`. It never opens or updates the PR. Requeueing a queued stem keeps its position
