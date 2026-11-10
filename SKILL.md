@@ -190,7 +190,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   `*_EFFORT`), falling back to `ORCH_MODEL`/`ORCH_EFFORT` in `$ORCH_STATE/env.sh`. Review and PR-text prompts come from
   `templates/review-prompt.md` and `pr-text-prompt.md` (tokens filled by the script; project rules via `BUILD_EXTRA`,
   `REVIEW_EXTRA`, `PRTEXT_EXTRA`).
-- They do **not** notify. Detect completion only by the report scan in the 15-minute check.
+- They do not notify on their own. Right after each launch, start `wait-lanes.sh <lane>` with the harness's
+  `run_in_background` (raise `ORCH_WAIT_MAX` for long lanes, and restart it on timeout); its exit is your notification
+  that the lane finished. The report scan in the 15-minute check stays the backstop.
 - At the next check after launch, verify activity (new commits or a dirty worktree, or `lane-busy.sh`). A launch can
   be silently held (queue gate, pause file): `launch.sh` prints `WAITING (queue gate)` and `STARTED`; check for them.
 - One external lane at a time unless the config says otherwise.
