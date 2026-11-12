@@ -11,6 +11,8 @@
 # ORCH_CI_RUNS_BEFORE (run IDs that existed before the turn's push; merge-pr.sh sets it): once none is pending, any
 # failed run fails the gate, and it passes only when a successful run's job named ORCH_REQUIRED_CHECK succeeded.
 # Cheap runs (the required job skipped) and cancelled runs are ignored; 15 min with no pending or passing run fails.
+# A run still "queued" with zero jobs ORCH_DEAD_RUN_MIN (default 20) minutes after it was created is dead (a GitHub
+# Actions incident can leave such runs, which can be neither cancelled nor deleted); it is ignored, with one log line.
 . "$(dirname "$0")/orch-env.sh"
 URL=$1; HS=$2
 seen_moved=
@@ -22,6 +24,15 @@ check_head() {
   else seen_moved=; fi
 }
 nap() { check_head; sleep "${ORCH_CI_SLEEP:-$1}"; }
+dead=
+# dead_run <run-id> <created-at>: true when the run is older than ORCH_DEAD_RUN_MIN minutes and has no jobs at all.
+dead_run() {
+  local age n
+  age=$(python3 -c 'import sys,datetime as d; t=d.datetime.strptime(sys.argv[1],"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=d.timezone.utc); print(int((d.datetime.now(d.timezone.utc)-t).total_seconds()//60))' "$2" 2>/dev/null) || return 1
+  [ "${age:-0}" -ge "${ORCH_DEAD_RUN_MIN:-20}" ] || return 1
+  n=$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=1" --jq '.total_count' 2>/dev/null) || return 1
+  [ "$n" = 0 ]
+}
 if [ "$ORCH_CI_GATE" != on ]; then echo "CI gate off; merging without waiting"; exit 0; fi
 echo "waiting for GitHub CI on $URL"; t0=$(date +%s)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
@@ -30,11 +41,19 @@ if [ -n "${ORCH_TURN_LABEL:-}" ]; then
   before=" ${ORCH_CI_RUNS_BEFORE:-} "; t1=$t0
   while :; do
     pending=0; passed=; failed=
-    runs=$(gh api "repos/$REPO/actions/runs?head_sha=$HS&event=pull_request&per_page=100" --jq '.workflow_runs[] | "\(.id) \(.status) \(.conclusion)"' 2>/dev/null) || pending=1
-    while read -r id st co; do
+    runs=$(gh api "repos/$REPO/actions/runs?head_sha=$HS&event=pull_request&per_page=100" --jq '.workflow_runs[] | "\(.id) \(.status) \(.conclusion) \(.created_at)"' 2>/dev/null) || pending=1
+    while read -r id st co created; do
       [ -n "$id" ] || continue
       case "$before" in *" $id "*) continue ;; esac
-      if [ "$st" != completed ]; then pending=1; continue; fi
+      if [ "$st" != completed ]; then
+        # A dead run: still "queued" with no jobs long after it was created (seen after a GitHub Actions incident;
+        # such runs can be neither cancelled nor deleted). It will never finish, so it must not hold the gate.
+        if [ "$st" = queued ] && dead_run "$id" "$created"; then
+          case " $dead " in *" $id "*) ;; *) dead="$dead $id"; echo "ignoring dead CI run $id (queued with no jobs for over ${ORCH_DEAD_RUN_MIN:-20} min)" ;; esac
+          continue
+        fi
+        pending=1; continue
+      fi
       case "$co" in
         success) gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | "\(.conclusion) \(.name)"' 2>/dev/null \
                    | grep -qxF "success $ORCH_REQUIRED_CHECK" && passed=$id ;;
