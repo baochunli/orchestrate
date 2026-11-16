@@ -7,4 +7,4 @@ Classify first:
 - PRE-EXISTING: also fails on origin/main → stop and report (reproduce once in a scratch worktree).
 Merge origin/main first. Grep for other tests with the same stale setup and fix them too.
 Run only the changed files, each alone (DB rules as in the project config); gates once. Never stash or pkill.
-Commit with the attribution trailer; push. Reply in 3 lines: STALE/REAL per file, files changed, SHA.
+Commit with the attribution trailer; push the branch only; never open, edit, mark ready or merge a pull request (no `gh pr` commands; the merge queue owns PRs). Reply in 3 lines: STALE/REAL per file, files changed, SHA.

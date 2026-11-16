@@ -62,7 +62,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     `merge-pr.sh` replaces `[GATES]` with the gate summary. Check line 1 is a title, not a body sentence.
   - `pipes/<branch>.out` — pipeline and merge-train output (start every pipeline with `run-pipe.sh`).
 - **Create a worktree:** `git worktree add -b <branch> <repo>-<stem> origin/main`.
-- **Builder** (agent `orch-builder`, or an external lane): one brief, one branch, push, no PR, report.
+- **Builder** (agent `orch-builder`, or an external lane): one brief, one branch, push, report. Lanes NEVER open,
+  edit, mark ready or merge a pull request (no `gh pr`); only the merge queue does. Every brief AND every ad-hoc fix
+  prompt must say so explicitly; external CLIs (Codex) open draft PRs on their own when not told otherwise.
 - **Review** (agent `orch-reviewer`): against `git merge-base origin/main HEAD` (or the parent for stacked branches).
 - **PR text:** a writer agent (or yourself) from brief + report + verdict + diff stat → `pr/<stem>.txt`.
 - **Queue:** `$S/run-pipe.sh <branch> $S/merge-seq.sh <stem>:<branch>:<stem>` (run in background).
@@ -278,6 +280,9 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   existing unit tests that pin query shapes, not only new tests.
 - **Rule changes stale old fixtures** — when a ruling tightens a rule, grep for tests that exercise the old behavior
   before queuing.
+- **Lane-opened draft PRs block merges** — a Codex lane told only "commit and push" opened a draft PR; `gh pr merge`
+  then failed with "Pull Request is still a draft" after a green CI. `merge-pr.sh` now marks a lane-opened draft ready
+  ("marked a lane-opened draft PR ready"), but prevent it: put the no-`gh pr` rule in every lane prompt.
 - **Branch names get reused** — `gh pr list --state merged --head <branch>` can match an old, unrelated PR with the
   same branch name. Pick unique lane names (add a date or counter) and key waiters on the PR number once it exists.
 - **Mechanical "both added" merges inside list literals** — when both sides end mid-entry, joining them needs the

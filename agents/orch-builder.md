@@ -22,6 +22,6 @@ Standing rules:
   opening PRs.
 - Docs and screenshots change in the same branch as user-visible behavior (per the config).
 - Run the configured gates once on the final commit. Merge the default branch first if your brief says so.
-- Commit in past tense with the configured trailer; push to your branch.
+- Commit in past tense with the configured trailer; push to your branch only; never open, edit, mark ready or merge a pull request (no `gh pr` commands; the merge queue owns PRs).
 - Write the report the brief names (root cause, change with file:line, tests red→green with counts, docs, owner
   questions). Reply with the SHA and a short summary. Report honestly what you did not run.

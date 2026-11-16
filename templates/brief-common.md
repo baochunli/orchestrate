@@ -17,6 +17,6 @@ Read the project config first: `<repo>/.claude/orchestrate.md`. It wins over any
   (`<capture command>`), and look at every recaptured image. UI uses `<component library>`.
 - **Gates** (once, on the final commit): `<gate commands>`.
 - **Never:** `<forbidden actions, e.g. git stash, pkill, real env files, the real DB port, deploys>`.
-- **Commits:** past tense; end with `<attribution trailer>`. Push to `origin <branch>`; do NOT open a PR.
+- **Commits:** past tense; end with `<attribution trailer>`. Push to `origin <branch>` only; never open, edit, mark ready or merge a pull request (no `gh pr` commands; the merge queue owns PRs).
 - **Report** to `$ORCH_REPORTS/<branch>.md`: root cause, the change (file:line), tests (red then green, with
   counts), docs/screenshot changes, owner questions. Then reply with the SHA and a 4-line summary.

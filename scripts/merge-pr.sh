@@ -33,6 +33,8 @@ T=$(head -1 "$pf"); tail -n +3 "$pf" > "$pf.body"
 # A CI failure leaves the PR open; a later run reuses it (the push already updated its head).
 URL=$(gh pr list --head "$br" --state open --json url -q '.[0].url' 2>/dev/null || true)
 if [ -n "$URL" ]; then gh pr edit "$URL" --title "$T" --body-file "$pf.body" >/dev/null
+  # A lane may have opened its own draft PR against the rules; the queue owns PRs, so un-draft it.
+  [ "$(gh pr view "$URL" --json isDraft -q .isDraft 2>/dev/null)" = true ] && { gh pr ready "$URL" >/dev/null && echo "marked a lane-opened draft PR ready (lanes must not open PRs)"; }
 else URL=$(gh pr create --base "$ORCH_MAIN" --head "$br" --title "$T" --body-file "$pf.body"); fi
 echo "$URL"
 if [ -n "${ORCH_TURN_LABEL:-}" ]; then

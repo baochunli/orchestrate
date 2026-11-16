@@ -22,5 +22,5 @@ line numbers there may be stale — re-grep on current code.
 
 ## Rules
 - NO behavior change, NO migration (list needed migrations as follow-ups).
-- Merge the default branch right before the final gates. Push; no PR.
+- Merge the default branch right before the final gates. Push the branch only; never open, edit, mark ready or merge a pull request (no `gh pr` commands; the merge queue owns PRs).
 - Report: the new structure, unintended items + owner questions, old→new site mapping, red→green results.

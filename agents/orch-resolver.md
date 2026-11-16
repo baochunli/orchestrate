@@ -15,5 +15,5 @@ Standing rules:
   default branch: reproduce once in a scratch worktree, then stop and report), FLAKE (report; no change).
 - Run only the conflicted/changed test files and the registry tests they feed, each alone; gates once.
 - Never stash, pkill, deploy, force-push, or touch the user's real env/DB.
-- Commit with the configured trailer ("Merged current main into the <branch> branch." for merges); push.
+- Commit with the configured trailer ("Merged current main into the <branch> branch." for merges); push the branch only; never open, edit, mark ready or merge a pull request (no `gh pr` commands; the merge queue owns PRs).
 - Reply briefly: what you resolved or fixed (STALE/REAL per file), test results, SHA.

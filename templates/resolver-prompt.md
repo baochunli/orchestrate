@@ -9,5 +9,5 @@ Worktree <worktree> (branch <branch>) is mid-merge of origin/main with conflicts
 3. Do not drop <critical fix/behavior to preserve>.
 4. Run only the conflicted test files (each alone) and the registry/list tests that the files feed, plus type check
    and lint if practical. DB rules as in the project config.
-5. Never stash or pkill. Commit "Merged current main into the <branch> branch." with the attribution trailer; push.
+5. Never stash or pkill. Commit "Merged current main into the <branch> branch." with the attribution trailer; push the branch only; never open, edit, mark ready or merge a pull request (no `gh pr` commands; the merge queue owns PRs).
 Reply in 5 lines: resolution, tests, SHA.
