@@ -232,6 +232,10 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - When a reviewer or builder raises a policy question, do not let it guess: it goes to the list.
 - **UI decisions**: when a layout choice is the user's, make a quick static mockup and show it (for example in a
   browser tab beside the terminal) before building; the approved mockup becomes the lane's spec, saved in `$ORCH_PLANS`.
+- **Fix bugs; don't add complexity.** During testing and stabilization the main job is fixing bugs with the smallest
+  change that fixes the observed problem — nothing adjacent, no redesign, no feature built on top of a bug report.
+  If a "proper" fix needs new machinery, offer the minimal fix and ask. Review findings outside the bug's scope become
+  follow-ups unless they are HIGH regressions in the changed code.
 - **Always the simplest design.** Every brief, fix round and response to a review finding takes the simplest design
   that meets the request. Review findings don't justify new machinery: prefer the simplest fix, or accept a rare edge
   case and ask the user.
@@ -381,3 +385,6 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   export, history and secret rotation, plus an access model threaded through a dozen screens; each review found more.
   The simplest reading (same email, mask the address in logs) would have done. Gate every complexity increase with the
   user before building (§6), and split branches when unrelated owner additions pile up.
+- **Bug reports turned into features** — "two reviewer rows look identical" became per-paper letters with a new table,
+  encrypted storage and backfills; "co-author can't open their paper" became a parallel access model. The user's rule:
+  the primary job is fixing bugs with the smallest change; features only when asked, simplest version, approved first.
