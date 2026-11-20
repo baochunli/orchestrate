@@ -400,3 +400,6 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Seven small fixes queued one by one took most of a day** — each PR waited ~18 minutes for the single CI runner,
   flaky browser steps were rerun instead of removed, and one conflict reset an item to the back. Batch ready fixes into
   one PR, remove flaky steps immediately, and watch the clock from "ready" to "merged".
+- **Folding a queued branch into a batch left the runner stuck** — the runner had already started that branch's turn
+  (its own PR and CI wait), so removing its queue file and merge-seq did nothing; the batch waited 15 minutes. When
+  folding, also stop the runner's in-flight `merge-pr.sh`/`ci-wait.sh` for that branch (kill those PIDs) and close its PR.
