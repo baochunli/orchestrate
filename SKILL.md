@@ -358,6 +358,10 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Deadline pressure** — when the user needs to start testing, tell them the already-merged commit they can deploy
   now; the remaining branch can follow. Test-merge main into a long-lived branch without touching its worktree:
   `git merge-tree --write-tree --name-only origin/<branch> origin/main`.
+- **A project env file silently overrode the model rule all day** — `$ORCH_STATE/env.sh` still defaulted
+  `REVIEW_MODEL` to a retired model and `REVIEW_EFFORT=high`, so every review launched without an explicit model ran on
+  the wrong one. After any routing change, grep env files and launch helpers for old model names, and read the model
+  shown in a lane's footer (`herdr pane read`) right after launch.
 - **Only touch workspaces you started.** Never close, prompt or send keys to a herdr workspace or pane the user
   opened themselves (unless they hand that specific one to you). "Clear all workspaces" means the ones you started;
   keep worktrees still used by the merge train or a running lane, and say which were kept and why.
