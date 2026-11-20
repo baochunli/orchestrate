@@ -175,6 +175,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
     remote branch, requeue.
   - A push rejection in the log → inspect; usually re-push after fetch/merge.
 - **Requeue** = run the same `run-pipe.sh ... merge-seq.sh ...` again (the PR is reused; a removed item goes to the end).
+- **Batch small fixes by default.** When two or more reviewed or verified fix branches are ready at once, merge them
+  into one batch branch and queue a single PR (one CI run) with their PR texts combined; never queue small fixes one by
+  one behind a single runner. Watch elapsed time from ready to merged.
 - **Manual batch branches** are only needed for branches that conflict with each other in shared registry/list
   files (each one conflicts after the other merges): merge them into one branch (`templates/resolver-prompt.md` style,
   "keep every side"), write one combined PR text, queue it. Exclude batched branches from the stalled-branch scan.
