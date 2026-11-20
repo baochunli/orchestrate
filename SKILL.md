@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Coordinate many parallel coding lanes in a git + GitHub repo — worktree per branch, builder → reviewer → PR text → merge train gated on exact-commit PR CI — with an independent 15-minute supervision check, decision logging, batching, and unattended/overnight operation. Use when the user says "orchestrate", asks to run several branches or agents in parallel with reviews and merges, wants a merge train, or wants work to continue while they are away.
+description: Coordinate many parallel coding lanes in a git + GitHub repo — worktree per branch, builder → reviewer → PR text → merge train gated on exact-commit PR CI — with an independent 10-minute supervision check with a short user report, decision logging, batching, and unattended/overnight operation. Use when the user says "orchestrate", asks to run several branches or agents in parallel with reviews and merges, wants a merge train, or wants work to continue while they are away.
 ---
 
 # Orchestrate
@@ -72,7 +72,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - **Chained external lanes:** `launch.sh` is single-stage (starts one lane and stops). `pipeline.sh` chains
   build → report check → review → PR text → merge train: `$S/run-pipe.sh <branch> $S/pipeline.sh <branch> '<deps>|-' [full]`.
   For an already-built branch run `review-chain.sh <stem> <branch>`; `CHAIN_NO_MERGE=1` stops after the PR text.
-  A failed review prints `CHAIN FAIL <stem>: <verdict head>`; the 15-minute check must grep `pipes/*.out` for it.
+  A failed review prints `CHAIN FAIL <stem>: <verdict head>`; the 10-minute check must grep `pipes/*.out` for it.
 - **Stacked branches:** create from `origin/<parent>`; queue with
   `$S/wait-merged.sh <#parent-PR> $ORCH_PR/<stem>.txt -- $S/run-pipe.sh <branch> $S/merge-seq.sh ...`.
   **Never** wait on `git merge-base --is-ancestor origin/<parent> ...`: the parent ref is deleted on merge.
@@ -204,11 +204,11 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   `REVIEW_EXTRA`, `PRTEXT_EXTRA`).
 - They do not notify on their own. Right after each launch, start `wait-lanes.sh <lane>` with the harness's
   `run_in_background` (raise `ORCH_WAIT_MAX` for long lanes, and restart it on timeout); its exit is your notification
-  that the lane finished. The report scan in the 15-minute check stays the backstop.
+  that the lane finished. The report scan in the 10-minute check stays the backstop.
 - **Also arm a stall watcher on every lane pane:** `$S/watch-pane.sh <pane_id> 10` in the background. It exits on
   STOPPED (agent no longer working), STALL (no visible output change for 10 min), QUESTION (the CLI is asking
   something) or GONE. A "wait until done" loop cannot see a stall or a pending question; this one can. Re-arm it after
-  every wake. Never more than ~15 minutes without looking at a running lane.
+  every wake. Never more than ~10 minutes without looking at a running lane.
 - **Never send Escape to a working agent CLI** — it interrupts the turn. Answer a lane's question with a prompt
   (`herdr agent prompt` / `pane send-text` + Enter); if you interrupt by mistake, re-send the full instruction at once.
 - **Never move, rename or archive a file a running lane was told to read** (verdicts, briefs). Move old verdicts
@@ -308,7 +308,7 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   PR texts and serial CI runs on one runner. Bundle small requests per area (§1 Granularity).
 - **Waiters keyed on parent refs looped forever** — GitHub deletes merged branches. Key every waiter on PR merged
   state (`wait-merged.sh`).
-- **A train conflict sat unnoticed for over an hour** — an event watcher reported it but nothing acted. The 15-minute
+- **A train conflict sat unnoticed for over an hour** — an event watcher reported it but nothing acted. The 10-minute
   check treats any conflict/failure without a live process or resolver as unhandled.
 - **A finished external lane was never reviewed** — external lanes don't notify. Scan reports on every check.
 - **A queue gate silently held an external lane for over an hour** — gates must print, and the next check must verify
