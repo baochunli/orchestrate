@@ -232,7 +232,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - When a reviewer or builder raises a policy question, do not let it guess: it goes to the list.
 - **UI decisions**: when a layout choice is the user's, make a quick static mockup and show it (for example in a
   browser tab beside the terminal) before building; the approved mockup becomes the lane's spec, saved in `$ORCH_PLANS`.
-- **Complexity gate (consult before it grows).** Any design that raises complexity even a little needs the user's OK
+- **Complexity gate (consult before it grows).** Any design that raises complexity even a little needs the user’s explicit approval
   *before* the work starts: new tables or columns, migrations, encryption or new storage formats, new message or email
   types, parallel code paths, new permission paths, or special cases in other subsystems (deletion, export, history,
   archives). Every brief says: stop and write the proposal, why, and the simplest alternative under
