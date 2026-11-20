@@ -232,6 +232,14 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - When a reviewer or builder raises a policy question, do not let it guess: it goes to the list.
 - **UI decisions**: when a layout choice is the user's, make a quick static mockup and show it (for example in a
   browser tab beside the terminal) before building; the approved mockup becomes the lane's spec, saved in `$ORCH_PLANS`.
+- **Complexity gate (consult before it grows).** Any design that raises complexity even a little needs the user's OK
+  *before* the work starts: new tables or columns, migrations, encryption or new storage formats, new message or email
+  types, parallel code paths, new permission paths, or special cases in other subsystems (deletion, export, history,
+  archives). Every brief says: stop and write the proposal, why, and the simplest alternative under
+  "Complexity decision for the user", then wait. You bring it to the user with a plain explanation and a
+  recommendation, simplest option first. Never approve it yourself, even when a reviewer or lane recommends it.
+  Read each user request in its simplest form first (e.g. "also email the matching account" = the same email, with
+  the address hidden in logs — not a new encrypted message type).
 - **Overnight / away mode** (user says so): no questions; recommended defaults; log every decision; build, review,
   merge after green CI; never deploy; prepare a morning summary (§8).
 
@@ -365,3 +373,8 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Only touch workspaces you started.** Never close, prompt or send keys to a herdr workspace or pane the user
   opened themselves (unless they hand that specific one to you). "Clear all workspaces" means the ones you started;
   keep worktrees still used by the merge train or a running lane, and say which were kept and why.
+- **A one-line request grew into a sprawling branch** — "also send the invitation to the account with this ORCID,
+  without revealing its address" became an encrypted private message type with special cases for account deletion,
+  export, history and secret rotation, plus an access model threaded through a dozen screens; each review found more.
+  The simplest reading (same email, mask the address in logs) would have done. Gate every complexity increase with the
+  user before building (§6), and split branches when unrelated owner additions pile up.
