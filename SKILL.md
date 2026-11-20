@@ -109,6 +109,10 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 ## 4. Merge train
 
+> **Prefer merging.** If CI fails only because of stale/outdated tests or flaky steps (product checks green, no real
+> regression), merge now and put the test fix in the next batch, whose full CI is the confirmation. Never requeue the
+> same work again and again for test-only failures; only a real product regression blocks a merge.
+>
 > **Default: batch.** Every set of ready, reviewed/verified branches is merged into ONE batch branch and ONE PR (one CI
 > run). A queue of many small PRs waiting on a single runner is a failure — the user has had to repeat this rule.
 
@@ -292,7 +296,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 (3) Finished lane → read its report and diff yourself; re-review only if the change is risky (permissions, confidentiality, data/migrations, lifecycle) or large — if unsure, ask the advisor model; otherwise mark it ready.
 (4) BATCH: merge every ready branch into ONE batch branch and queue ONE PR (one CI run) with combined PR text. Never queue small fixes one by one; keep the queue at 1–2 items; branches that finish while a batch is in CI join the next batch.
 (5) Review FAIL → smallest fix only (fix bugs first, simplest design, no hair-splitting); findings outside the bug's scope become follow-ups.
-(6) CI failure unrelated to the branch (flaky browser step etc.) → REMOVE that step/assertion on the front-of-queue branch and push at once; no reruns. CONFLICT / MERGE FAIL → dispatch a resolver or fix now, then requeue.
+(6) CI failure from stale/outdated tests or flaky steps (no real product regression) → MERGE now and put the test fix in the next batch (its full CI confirms it); no reruns, no requeue loops. A real regression → smallest fix, then requeue. CONFLICT / MERGE FAIL → dispatch a resolver or fix now, then requeue.
 (7) Anything that would add complexity (new tables/migrations, storage formats, message types, parallel paths, special cases) → stop and ask the user first.
 (8) Log every action in the decisions log; track elapsed time from "ready" to "merged".
 (9) Reply to the user with a SHORT table: item → stage (building / review / fixing / batched / in CI / merged) + next, and the main commit to deploy after any merge.
