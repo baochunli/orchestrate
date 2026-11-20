@@ -208,7 +208,7 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   (`REVIEW_EFFORT`); never hard-code one effort for every reviewer model.
 - **Another vendor's CLI as a subagent (e.g. Antigravity `agy`).** Launch it in its own herdr workspace on its own
   worktree: `herdr workspace create --cwd <wt> --label <lane> --no-focus`, then send
-  `agy --mode auto --effort <e> -i "Read and follow <brief path> exactly."` + Enter; the first run in a folder asks to
+  `agy --mode auto --dangerously-skip-permissions --effort <e> -i "Read and follow <brief path> exactly."` (the flag stops lanes stalling on approval prompts; the brief's hard rules become the only guard) + Enter; the first run in a folder asks to
   trust it (Enter). Brief in a file, same hard rules as any lane, no push/PR. Watch it with `watch-pane.sh`.
   If the user started such an agent in their **main checkout**, switch that checkout to a new branch at once (no file
   changes), have it commit there, then move the branch to its own worktree and put the checkout back on main.
