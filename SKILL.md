@@ -358,5 +358,6 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Deadline pressure** — when the user needs to start testing, tell them the already-merged commit they can deploy
   now; the remaining branch can follow. Test-merge main into a long-lived branch without touching its worktree:
   `git merge-tree --write-tree --name-only origin/<branch> origin/main`.
-- **"Clear all workspaces"** — close every workspace except the session's own, and keep worktrees still used by the
-  merge train or a running lane; say which were kept and why.
+- **Only touch workspaces you started.** Never close, prompt or send keys to a herdr workspace or pane the user
+  opened themselves (unless they hand that specific one to you). "Clear all workspaces" means the ones you started;
+  keep worktrees still used by the merge train or a running lane, and say which were kept and why.
