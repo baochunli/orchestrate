@@ -220,10 +220,12 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - **Effort ceilings per model.** Some models must never run at the top effort (e.g. a "challenging work" model at
   `high`, not `xhigh`). The review chain maps model → effort automatically and allows an explicit override
   (`REVIEW_EFFORT`); never hard-code one effort for every reviewer model.
-- **Another vendor's CLI as a subagent (e.g. Antigravity `agy`).** Launch it in its own herdr workspace on its own
-  worktree: `herdr workspace create --cwd <wt> --label <lane> --no-focus`, then send
-  `agy --mode auto --dangerously-skip-permissions --effort <e> -i "Read and follow <brief path> exactly."` — or simply `KIND=agy MODEL=default launch.sh <lane> <wt> <effort> "<prompt>"` (herdr `--kind agy`; launch.sh accepts the trust prompt and verifies the start) (the flag stops lanes stalling on approval prompts; the brief's hard rules become the only guard) + Enter; the first run in a folder asks to
-  trust it (Enter). Brief in a file, same hard rules as any lane, no push/PR. Watch it with `watch-pane.sh`.
+- **Another vendor's CLI as a subagent (e.g. Antigravity `agy`).** Launch it like any external lane:
+  `KIND=agy MODEL=default launch.sh <lane> <wt> <effort> "Read and follow <brief path> exactly."` (herdr's
+  `--kind agy`; `MODEL=default` keeps agy's configured model). launch.sh runs it with `--mode auto
+  --dangerously-skip-permissions --effort <effort>` (the flag stops lanes stalling on approval prompts, so the brief's
+  hard rules are the only guard), accepts the first-run "trust this folder" prompt and verifies the lane started.
+  Brief in a file, same hard rules as any lane, no push/PR. Watch it with `watch-pane.sh`.
   If the user started such an agent in their **main checkout**, switch that checkout to a new branch at once (no file
   changes), have it commit there, then move the branch to its own worktree and put the checkout back on main.
 - **Re-reviewing:** close the finished `rd-review-<stem>` lane and move its verdict aside before relaunching, or the
