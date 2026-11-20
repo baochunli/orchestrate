@@ -13,6 +13,6 @@ for x in json.load(sys.stdin)['result'].get('panes',[]):
   if [ "$st" != "working" ]; then idle=$((idle+1)); [ $idle -ge 2 ] && { echo "STOPPED $p status=$st $(date +%H:%M)"; exit 0; }; else idle=0; fi
   if [ "$out" = "$last" ]; then same=$((same+1)); else same=0; last=$out; fi
   [ $same -ge $lim ] && { echo "STALL $p no output change for ${lim} min $(date +%H:%M)"; exit 0; }
-  herdr pane read $p --lines 8 2>/dev/null | grep -qE "\? .*\?$|Do you want|\[y/n\]|Yes, I trust|Allow|approve" && { echo "QUESTION $p $(date +%H:%M)"; exit 0; }
+  herdr pane read $p --lines 8 2>/dev/null | grep -v "auto-approved" | grep -qE "\? .*\?$|Do you want|\[y/n\]|Yes, I trust|Allow this|Approve\?|approve this" && { echo "QUESTION $p $(date +%H:%M)"; exit 0; }
   sleep 60
 done
