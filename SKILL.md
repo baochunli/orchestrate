@@ -108,6 +108,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 
 ## 4. Merge train
 
+> **Default: batch.** Every set of ready, reviewed/verified branches is merged into ONE batch branch and ONE PR (one CI
+> run). A queue of many small PRs waiting on a single runner is a failure — the user has had to repeat this rule.
+
 - `merge-seq.sh` is a **FIFO** train: one branch at a time, one CI run per attempt (`merge-queue.sh`).
   - **Urgent work goes first** (the one exception to FIFO). Classify every lane as urgent or not when you create it
     and log it. Urgent = a real user blocked in production, a production bug or data/confidentiality problem, a
