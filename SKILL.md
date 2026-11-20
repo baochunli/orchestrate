@@ -33,8 +33,9 @@ ask the user only what is theirs to decide, and log everything. You never deploy
 - **Scripts.** `S=~/.claude/skills/orchestrate/scripts`. All read `orch-env.sh` (env vars documented there;
   per-repo overrides in `$ORCH_STATE/env.sh`).
 - **Decisions log.** Append to `$ORCH_LOGS/decisions-<date>.md`: one line per decision, ruling, merge, failure, miss.
-- **15-minute check.** Create it with CronCreate (`7,22,37,52 * * * *`, recurring) using the prompt in §9. Tell the
-  user cron jobs are session-only (gone when the session ends, auto-expire after 7 days) and re-create them on resume.
+- **10-minute check — ALWAYS, at the start of every session (and on every resume).** Create it with CronCreate
+  (`3,13,23,33,43,53 * * * *`, recurring) using the prompt in §9, before launching anything. Cron jobs are
+  session-only (gone when the session ends, auto-expire after 7 days): re-create it whenever a session starts or resumes.
 - **Supplementary watcher (optional).** `$S/watch-all.sh` with the harness's `run_in_background` (never `&`);
   restart after every exit. It is never the only safeguard.
 
@@ -282,21 +283,20 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
   4. misses and how they were fixed;
   5. open questions (count; offer to ask one by one).
 
-## 9. The 15-minute check (paste into CronCreate)
+## 9. The 10-minute check (paste into CronCreate at every session start)
 
 ```
-Run the 15-minute independent train check (the user's standing rule: a timer must watch every 15 minutes and cannot depend on any other watcher). Do NOT rely on watch-all.sh or waiter loops; check ground truth. State dir: $ORCH_STATE (see ~/.claude/skills/orchestrate/SKILL.md).
-(1) git fetch; gh pr list --state open; git log --oneline -8 origin/main.
-(2) grep -h "CHAIN FAIL" $ORCH_PIPES/*.out (a failed review or lane: act on it). For each branch in flight: tail -5 $ORCH_PIPES/<branch>.out (check the file time; ignore lines older than the latest requeue) and ps for merge-seq.sh. An rc=3 CONFLICT, MERGE FAIL CI or push rejection with no live merge-seq for that branch and no resolver running is UNHANDLED: dispatch a fix now (resolve mechanical conflicts yourself), then requeue.
-(3) Scan every $ORCH_REPORTS/*.md modified today (external lanes do NOT notify; this scan is how you learn they finished). Skip branches listed in $ORCH_PLANS/batches.md. STALLED = no reviews/<stem>-review*.md, or a PASS review without pr/<stem>.txt, or both but no pipes/<branch>.out and no live merge-seq. Advance it (review → PR text → merge-seq).
-(4) External lanes launched since the last check: verify they actually started (new commits / dirty worktree / lane-busy.sh; WAITING lines in pipes/launch-waits.out mean a gate is holding them).
-(4b) Every running lane pane (herdr agent/pane list): its visible output must have changed since the last check and a watch-pane.sh watcher must be armed; a lane that is idle, asking a question, or unchanged for 10+ minutes gets handled now (answer, re-prompt, or relaunch). Never leave a lane unchecked for more than ~15 minutes.
-(5) Batches and gated rows: queue a batch when its report and PR text exist; queue a stacked branch or start a gated lane only after its parent's PR shows MERGED.
-(6) Any waiter looping > 30 min: verify its condition still makes sense (PR merged state, never parent refs).
-(7) Main CI on the newest commit: gh run list --branch main -L 3.
-(8) Keep the external lane busy if there is approved work.
-(9) Log every action in the decisions log.
-Never deploy, never stash, never pkill, never touch forbidden resources from the project config. If everything is moving and healthy, reply in one line.
+10-minute check + SHORT REPORT TO THE USER. Ground truth only; never rely on watchers or waiter loops. State dir: $ORCH_STATE (see ~/.claude/skills/orchestrate/SKILL.md).
+(1) git fetch; gh pr list --state open; git log --oneline -8 origin/main; ls $ORCH_RUN/merge-queue/; ps for merge-seq.sh; gh pr checks on open PRs.
+(2) Lanes: every running lane pane (herdr pane read) and every running internal agent's worktree must show progress since the last check and have a watcher; idle / question / unchanged 10+ min → handle now. Scan $ORCH_REPORTS/*.md modified today (external lanes don't notify).
+(3) Finished lane → read its report and diff yourself; re-review only if the change is risky (permissions, confidentiality, data/migrations, lifecycle) or large — if unsure, ask the advisor model; otherwise mark it ready.
+(4) BATCH: merge every ready branch into ONE batch branch and queue ONE PR (one CI run) with combined PR text. Never queue small fixes one by one; keep the queue at 1–2 items; branches that finish while a batch is in CI join the next batch.
+(5) Review FAIL → smallest fix only (fix bugs first, simplest design, no hair-splitting); findings outside the bug's scope become follow-ups.
+(6) CI failure unrelated to the branch (flaky browser step etc.) → REMOVE that step/assertion on the front-of-queue branch and push at once; no reruns. CONFLICT / MERGE FAIL → dispatch a resolver or fix now, then requeue.
+(7) Anything that would add complexity (new tables/migrations, storage formats, message types, parallel paths, special cases) → stop and ask the user first.
+(8) Log every action in the decisions log; track elapsed time from "ready" to "merged".
+(9) Reply to the user with a SHORT table: item → stage (building / review / fixing / batched / in CI / merged) + next, and the main commit to deploy after any merge.
+Never deploy, never stash, never pkill, never touch forbidden resources from the project config.
 ```
 
 ## 10. Lessons (failures seen in practice, and the fix)
