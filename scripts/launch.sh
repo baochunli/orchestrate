@@ -1,5 +1,7 @@
 #!/bin/bash
-# usage: [MODEL=<model>] [KIND=muse|codex] launch.sh <lane-name> <dir> <effort> <prompt>
+# usage: [MODEL=<model>] [KIND=muse|codex|agy] launch.sh <lane-name> <dir> <effort> <prompt>
+# agy (Antigravity CLI): MODEL may be "default" (or "agy") to keep agy's configured model; it runs with
+# --mode auto --dangerously-skip-permissions --effort <effort>, and the first-run "trust this folder" prompt is accepted.
 # Starts an EXTERNAL long-running agent lane in a herdr workspace (requires the herdr CLI) and verifies it really
 # started on the prompt (not left queued); retries twice. KIND picks the CLI (default from $ORCH_EXTERNAL_KIND, else muse).
 #
@@ -34,6 +36,13 @@ for attempt in 1 2 3; do
     muse) herdr agent start "$name" --kind muse --pane "$pane" --timeout 90000 -- --model "$MODEL" --reasoning-effort "$effort" --yolo 2>&1 | head -c 25; echo ;;
     codex) herdr agent start "$name" --kind codex --pane "$pane" --timeout 90000 -- --model "$MODEL" -c "model_reasoning_effort=\"$effort\"" \
              -c features.multi_agent=false -c check_for_update_on_startup=false --no-daemon --cd "$dir" 2>&1 | head -c 25; echo ;;
+    agy) am=(); case "$MODEL" in default|agy) ;; *) am=(--model "$MODEL") ;; esac
+         herdr agent start "$name" --kind agy --pane "$pane" --timeout 90000 -- --mode auto --dangerously-skip-permissions \
+           --effort "$effort" "${am[@]}" 2>&1 | head -c 25; echo
+         # First run in a folder asks to trust it: accept (the lane only ever runs in its own worktree).
+         for _ in 1 2 3 4 5 6; do
+           herdr pane read "$pane" --source visible 2>/dev/null | grep -qi "trust this folder\|trust the contents" && { herdr pane send-keys "$pane" Enter >/dev/null 2>&1; break; }
+           sleep 3; done ;;
     *) echo "launch.sh: unknown KIND $KIND" >&2; exit 2 ;;
   esac
   sleep 5
