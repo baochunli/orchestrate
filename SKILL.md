@@ -195,6 +195,26 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - They do not notify on their own. Right after each launch, start `wait-lanes.sh <lane>` with the harness's
   `run_in_background` (raise `ORCH_WAIT_MAX` for long lanes, and restart it on timeout); its exit is your notification
   that the lane finished. The report scan in the 15-minute check stays the backstop.
+- **Also arm a stall watcher on every lane pane:** `$S/watch-pane.sh <pane_id> 10` in the background. It exits on
+  STOPPED (agent no longer working), STALL (no visible output change for 10 min), QUESTION (the CLI is asking
+  something) or GONE. A "wait until done" loop cannot see a stall or a pending question; this one can. Re-arm it after
+  every wake. Never more than ~15 minutes without looking at a running lane.
+- **Never send Escape to a working agent CLI** — it interrupts the turn. Answer a lane's question with a prompt
+  (`herdr agent prompt` / `pane send-text` + Enter); if you interrupt by mistake, re-send the full instruction at once.
+- **Never move, rename or archive a file a running lane was told to read** (verdicts, briefs). Move old verdicts
+  aside only after the lane that reads them has finished, or point the lane at the new path in the same message.
+- **Effort ceilings per model.** Some models must never run at the top effort (e.g. a "challenging work" model at
+  `high`, not `xhigh`). The review chain maps model → effort automatically and allows an explicit override
+  (`REVIEW_EFFORT`); never hard-code one effort for every reviewer model.
+- **Another vendor's CLI as a subagent (e.g. Antigravity `agy`).** Launch it in its own herdr workspace on its own
+  worktree: `herdr workspace create --cwd <wt> --label <lane> --no-focus`, then send
+  `agy --mode auto --effort <e> -i "Read and follow <brief path> exactly."` + Enter; the first run in a folder asks to
+  trust it (Enter). Brief in a file, same hard rules as any lane, no push/PR. Watch it with `watch-pane.sh`.
+  If the user started such an agent in their **main checkout**, switch that checkout to a new branch at once (no file
+  changes), have it commit there, then move the branch to its own worktree and put the checkout back on main.
+- **Re-reviewing:** close the finished `rd-review-<stem>` lane and move its verdict aside before relaunching, or the
+  chain returns the stale verdict. Reusing a still-open review lane with a delta prompt keeps its context (cheaper for
+  large reviews); then the old verdict path must stay readable until it writes the new one.
 - At the next check after launch, verify activity (new commits or a dirty worktree, or `lane-busy.sh`). A launch can
   be silently held (queue gate, pause file): `launch.sh` prints `WAITING (queue gate)` and `STARTED`; check for them.
 - One external lane at a time unless the config says otherwise.
@@ -246,6 +266,7 @@ Run the 15-minute independent train check (the user's standing rule: a timer mus
 (2) grep -h "CHAIN FAIL" $ORCH_PIPES/*.out (a failed review or lane: act on it). For each branch in flight: tail -5 $ORCH_PIPES/<branch>.out (check the file time; ignore lines older than the latest requeue) and ps for merge-seq.sh. An rc=3 CONFLICT, MERGE FAIL CI or push rejection with no live merge-seq for that branch and no resolver running is UNHANDLED: dispatch a fix now (resolve mechanical conflicts yourself), then requeue.
 (3) Scan every $ORCH_REPORTS/*.md modified today (external lanes do NOT notify; this scan is how you learn they finished). Skip branches listed in $ORCH_PLANS/batches.md. STALLED = no reviews/<stem>-review*.md, or a PASS review without pr/<stem>.txt, or both but no pipes/<branch>.out and no live merge-seq. Advance it (review → PR text → merge-seq).
 (4) External lanes launched since the last check: verify they actually started (new commits / dirty worktree / lane-busy.sh; WAITING lines in pipes/launch-waits.out mean a gate is holding them).
+(4b) Every running lane pane (herdr agent/pane list): its visible output must have changed since the last check and a watch-pane.sh watcher must be armed; a lane that is idle, asking a question, or unchanged for 10+ minutes gets handled now (answer, re-prompt, or relaunch). Never leave a lane unchecked for more than ~15 minutes.
 (5) Batches and gated rows: queue a batch when its report and PR text exist; queue a stacked branch or start a gated lane only after its parent's PR shows MERGED.
 (6) Any waiter looping > 30 min: verify its condition still makes sense (PR merged state, never parent refs).
 (7) Main CI on the newest commit: gh run list --branch main -L 3.
@@ -309,3 +330,33 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Review loops kept finding new HIGHs** — after the first fix round, review only the delta (`templates/delta-review-prompt.md`).
 - **Docs screenshots drift visually** — capture tooling must enforce one framing (uniform margin of page background);
   add a check so tightly cropped captures fail, and fix the tool before any lane recaptures.
+- **A lane sat stuck for 90 minutes unnoticed** — it had been told to read a verdict the orchestrator then moved, and
+  only "wait until done" loops were armed. Arm `watch-pane.sh` on every lane, never move files a lane reads (§5).
+- **An Escape keystroke killed a lane's turn** — sent to dismiss a CLI question, it interrupted the work. Never send
+  Escape to a working agent; answer by prompt.
+- **A large rewrite by another agent quietly dropped rules** — a docs revision cut 60% of the text; three review rounds
+  found ~110 lost or changed rules (visibility, deadlines, limits). Brief such work as "brevity from structure, never
+  deletion; restore the original sentence inside a fold when unsure", review for *lost facts* explicitly, and from the
+  second round fail only on regressions the branch introduced — errors the base already had become follow-ups, or the
+  review never converges. Also preserve every published anchor (old links/bookmarks) and keep folded text in search.
+- **Three review rounds used up on one sentence** — offer the user "fix the line, orchestrator verifies the diff" instead
+  of a fourth full review.
+- **Old failure lines re-triggered a pipe watcher** — watch only new lines (`tail -n +<L>` from the length at arming).
+- **A check added by one PR failed the next PR** — that is the check working (e.g. a row-height assertion caught new
+  controls of a different size). Fix the UI, never the check.
+- **Fixed ports in tests flake** — `EADDRINUSE` when shards overlap. Use port 0 / ephemeral ports; classify as FLAKY and
+  rerun, then fix in a follow-up.
+- **Browser "Load request cancelled" after a reload/send** — usually the test navigates while a request is in flight.
+  Route test-initiated reloads through the runner's navigation helper and wait for the UI's success state before
+  moving on; never loosen the failed-request rule. A cancelled POST deserves proof the action itself completed.
+- **Guard tests catch new copy** (e.g. typography: straight quotes in an error string) — run the prequeue smoke before
+  queueing any branch an external agent wrote; it costs seconds and saves a CI cycle.
+- **A bug report was "explained" before it was understood** — a lane reproduced a plausible cause by forcing data the
+  app never produces; its one-line summary overstated it. Read the full report, say what is and isn't confirmed, and
+  ask the user one discriminating question (e.g. which email subject arrived) instead of stacking theories. If the
+  user then says it isn't a bug, cancel cleanly (stop the review, close lanes, remove the worktree, nothing queued).
+- **Deadline pressure** — when the user needs to start testing, tell them the already-merged commit they can deploy
+  now; the remaining branch can follow. Test-merge main into a long-lived branch without touching its worktree:
+  `git merge-tree --write-tree --name-only origin/<branch> origin/main`.
+- **"Clear all workspaces"** — close every workspace except the session's own, and keep worktrees still used by the
+  merge train or a running lane; say which were kept and why.
