@@ -178,6 +178,9 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 - **Batch small fixes by default.** When two or more reviewed or verified fix branches are ready at once, merge them
   into one batch branch and queue a single PR (one CI run) with their PR texts combined; never queue small fixes one by
   one behind a single runner. Watch elapsed time from ready to merged.
+- **Remove flaky CI steps on the spot.** When a CI browser step fails for reasons unrelated to the branch, delete that
+  step (or its flaky assertion) on the front-of-queue branch and push — no reruns first; main then carries the removal.
+  Keep the queue at one or two items: branches that finish while a batch is in CI join the next batch.
 - **Manual batch branches** are only needed for branches that conflict with each other in shared registry/list
   files (each one conflicts after the other merges): merge them into one branch (`templates/resolver-prompt.md` style,
   "keep every side"), write one combined PR text, queue it. Exclude batched branches from the stalled-branch scan.
@@ -391,3 +394,6 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
 - **Bug reports turned into features** — "two reviewer rows look identical" became per-paper letters with a new table,
   encrypted storage and backfills; "co-author can't open their paper" became a parallel access model. The user's rule:
   the primary job is fixing bugs with the smallest change; features only when asked, simplest version, approved first.
+- **Seven small fixes queued one by one took most of a day** — each PR waited ~18 minutes for the single CI runner,
+  flaky browser steps were rerun instead of removed, and one conflict reset an item to the back. Batch ready fixes into
+  one PR, remove flaky steps immediately, and watch the clock from "ready" to "merged".
