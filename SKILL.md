@@ -366,6 +366,7 @@ Never deploy, never stash, never pkill, never touch forbidden resources from the
   add a check so tightly cropped captures fail, and fix the tool before any lane recaptures.
 - **A lane sat stuck for 90 minutes unnoticed** — it had been told to read a verdict the orchestrator then moved, and
   only "wait until done" loops were armed. Arm `watch-pane.sh` on every lane, never move files a lane reads (§5).
+- **agy lanes end their turn while their own background jobs run** — the pane goes `done` with "waiting for the background tasks", and nothing resumes it. Every agy brief says "never end your turn while your background jobs run; poll them yourself". When a lane ends this way, prompt it to continue and re-arm `wait-lanes.sh`.
 - **An Escape keystroke killed a lane's turn** — sent to dismiss a CLI question, it interrupted the work. Never send
   Escape to a working agent; answer by prompt.
 - **A large rewrite by another agent quietly dropped rules** — a docs revision cut 60% of the text; three review rounds
