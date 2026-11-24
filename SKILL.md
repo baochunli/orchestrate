@@ -90,6 +90,10 @@ plan → worktree → builder → report → review (verdict) → [fix → delta
 | Long demanding builds | optional external lane (`launch.sh`), **one at a time**, reviewed internally |
 
 - Effort for Opus subagents: medium unless the user says otherwise (pass `effort` only when told).
+- **Advisor model: Fable 5.2 at high effort**, not 5.1. The harness setting holds it: `~/.claude/settings.json` has
+  `"advisorModel": "claude-fable-5-2"` and `modelSettings."claude-fable-5-2".effortLevel = "high"`. The alias `fable`
+  can resolve to an older version, so pin the full id. Tell internal subagents on challenging work to call `advisor()`
+  before committing to a design and before declaring done. The supervisor consults it before plan decisions.
 - Keep the external lane busy when there is approved work, but verify it started (§5).
 
 ## 3. Review policy
